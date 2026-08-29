@@ -1,0 +1,86 @@
+.ledger-tape {
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 10px 0;
+  position: relative;
+}
+
+.ledger-tape::before,
+.ledger-tape::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 60px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.ledger-tape::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--surface-2), transparent);
+}
+
+.ledger-tape::after {
+  right: 0;
+  background: linear-gradient(270deg, var(--surface-2), transparent);
+}
+
+.ledger-tape__track {
+  display: flex;
+  width: max-content;
+  animation: scroll-tape 60s linear infinite;
+}
+
+.ledger-tape__track:hover {
+  animation-play-state: paused;
+}
+
+.ledger-tape__item {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ledger-tape__item.is-win {
+  color: var(--green);
+}
+
+.ledger-tape__item.is-win strong {
+  color: var(--green);
+}
+
+.ledger-tape__item.is-loss {
+  color: var(--text-muted);
+}
+
+.ledger-tape__item.is-loss strong {
+  color: var(--red);
+}
+
+.ledger-tape__item strong {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.ledger-tape__dot {
+  color: var(--border);
+  margin-left: 8px;
+  opacity: 0.5;
+}
+
+@keyframes scroll-tape {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ledger-tape__track { animation: none; overflow-x: auto; }
+}

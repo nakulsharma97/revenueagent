@@ -1,0 +1,34 @@
+# Build output
+target/
+dist/
+dist-ssr/
+
+# Dependencies
+node_modules/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# H2 database files (if persisted locally)
+*.db
+*.mv.db
+*.trace.db

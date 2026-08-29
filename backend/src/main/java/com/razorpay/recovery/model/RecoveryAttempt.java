@@ -1,0 +1,55 @@
+package com.razorpay.recovery.model;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "recovery_attempts")
+@Getter
+@Setter
+@NoArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
+public class RecoveryAttempt {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "transaction_id")
+    private Transaction transaction;
+
+    @Enumerated(EnumType.STRING)
+    private RecoveryAction actionTaken;
+
+    /** The agent's natural-language justification — shown in the UI for explainability. */
+    @Column(length = 1000)
+    private String reasoning;
+
+    private double confidence;
+
+    @Enumerated(EnumType.STRING)
+    private AttemptOutcome outcome;
+
+    private BigDecimal amountRecovered = BigDecimal.ZERO;
+    private BigDecimal interventionCost = BigDecimal.ZERO;
+
+    private LocalDateTime executedAt;
+
+    /** True when a live LLM call produced the decision; false when the rules-only fallback did. */
+    private boolean llmDriven;
+
+    public enum RecoveryAction {
+        RETRY_NOW, RETRY_SCHEDULED, SEND_PAYMENT_LINK, OFFER_DISCOUNT, ESCALATE_TO_HUMAN, ABANDON
+    }
+
+    public enum AttemptOutcome {
+        PENDING, SUCCESS, FAILED
+    }
+}
