@@ -1,9 +1,9 @@
 .ledger-tape {
   overflow: hidden;
-  border-top: var(--rule);
-  border-bottom: 2px solid var(--text);
-  background: var(--surface-2);
-  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 10px 0;
   position: relative;
 }
 
@@ -20,12 +20,12 @@
 
 .ledger-tape::before {
   left: 0;
-  background: linear-gradient(90deg, var(--surface-2), transparent);
+  background: linear-gradient(90deg, var(--surface), transparent);
 }
 
 .ledger-tape::after {
   right: 0;
-  background: linear-gradient(270deg, var(--surface-2), transparent);
+  background: linear-gradient(270deg, var(--surface), transparent);
 }
 
 .ledger-tape__track {
@@ -40,7 +40,7 @@
 
 .ledger-tape__item {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   white-space: nowrap;
   padding: 0 14px;
@@ -90,11 +90,12 @@
   display: inline-block;
   width: 7px;
   height: 14px;
-  background: var(--text);
+  background: var(--green);
   margin-left: 4px;
   animation: blink 1s step-end infinite;
   vertical-align: middle;
   flex-shrink: 0;
+  border-radius: 2px;
 }
 
 @keyframes scroll-tape {
@@ -111,11 +112,11 @@
   position: absolute;
   bottom: 100%;
   left: 14px;
-  background: var(--ink);
+  background: var(--text);
   color: var(--bg);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 4px 8px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  padding: 6px 10px;
   white-space: nowrap;
   max-width: 400px;
   overflow: hidden;
@@ -123,10 +124,12 @@
   z-index: 10;
   pointer-events: none;
   line-height: 1.4;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
 }
 
 .ledger-tape__tooltip-signoff {
-  color: #FFB300;
+  color: #FBBF24;
   font-weight: 600;
   margin-left: 6px;
 }
