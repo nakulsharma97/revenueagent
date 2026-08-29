@@ -1,9 +1,9 @@
 .ledger-tape {
   overflow: hidden;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  border-top: var(--rule);
+  border-bottom: 2px solid var(--text);
   background: var(--surface-2);
-  padding: 10px 0;
+  padding: 8px 0;
   position: relative;
 }
 
@@ -13,7 +13,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 60px;
+  width: 40px;
   z-index: 2;
   pointer-events: none;
 }
@@ -31,7 +31,7 @@
 .ledger-tape__track {
   display: flex;
   width: max-content;
-  animation: scroll-tape 60s linear infinite;
+  animation: scroll-tape 80s linear infinite;
 }
 
 .ledger-tape__track:hover {
@@ -40,21 +40,23 @@
 
 .ledger-tape__item {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
   white-space: nowrap;
-  padding: 0 16px;
+  padding: 0 14px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  letter-spacing: 0.01em;
 }
 
 .ledger-tape__item.is-win {
-  color: var(--green);
+  color: var(--ink-green);
+  font-weight: 600;
 }
 
 .ledger-tape__item.is-win strong {
-  color: var(--green);
+  color: var(--ink-green);
 }
 
 .ledger-tape__item.is-loss {
@@ -62,18 +64,37 @@
 }
 
 .ledger-tape__item.is-loss strong {
-  color: var(--red);
+  color: var(--ink-red);
+}
+
+.ledger-tape__item.is-pending {
+  color: var(--ink-amber);
 }
 
 .ledger-tape__item strong {
   color: var(--text-secondary);
-  font-weight: 500;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
 }
 
 .ledger-tape__dot {
   color: var(--border);
-  margin-left: 8px;
-  opacity: 0.5;
+  margin-left: 6px;
+  opacity: 0.6;
+}
+
+/* Blinking cursor at the end */
+.ledger-tape__cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  background: var(--text);
+  margin-left: 4px;
+  animation: blink 1s step-end infinite;
+  vertical-align: middle;
+  flex-shrink: 0;
 }
 
 @keyframes scroll-tape {
@@ -83,4 +104,29 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ledger-tape__track { animation: none; overflow-x: auto; }
+}
+
+/* Hover tooltip showing reasoning */
+.ledger-tape__tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 14px;
+  background: var(--ink);
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 4px 8px;
+  white-space: nowrap;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 10;
+  pointer-events: none;
+  line-height: 1.4;
+}
+
+.ledger-tape__tooltip-signoff {
+  color: #FFB300;
+  font-weight: 600;
+  margin-left: 6px;
 }

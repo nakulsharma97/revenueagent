@@ -45,6 +45,17 @@ public class RecoveryAttempt {
     /** True when a live LLM call produced the decision; false when the rules-only fallback did. */
     private boolean llmDriven;
 
+    /** True when this attempt requires human review before execution (per the brief's bounded-workflow rule). */
+    private boolean requiresHumanSignoff;
+
+    /** Explains why sign-off is required (e.g. "LLM proposed 20% discount, capped to 15%" or "3rd consecutive failure"). */
+    @Column(length = 500)
+    private String signoffReason;
+
+    /** Groups all attempts from one batch run for per-batch metrics. */
+    @Column(length = 36)
+    private String batchId;
+
     public enum RecoveryAction {
         RETRY_NOW, RETRY_SCHEDULED, SEND_PAYMENT_LINK, OFFER_DISCOUNT, ESCALATE_TO_HUMAN, ABANDON
     }

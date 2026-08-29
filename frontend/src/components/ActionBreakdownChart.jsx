@@ -3,12 +3,12 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { fetchActionBreakdown } from '../api';
 
 const ACTION_CONFIG = {
-  RETRY_NOW: { color: '#059669', label: 'Retry Now' },
-  RETRY_SCHEDULED: { color: '#34D399', label: 'Retry Scheduled' },
-  SEND_PAYMENT_LINK: { color: '#D97706', label: 'Payment Link' },
-  OFFER_DISCOUNT: { color: '#DC2626', label: 'Discount Offer' },
-  ESCALATE_TO_HUMAN: { color: '#6366F1', label: 'Escalate' },
-  ABANDON: { color: '#6B7280', label: 'Abandon' },
+  RETRY_NOW: { color: 'var(--ink-green)', label: 'Retry Now' },
+  RETRY_SCHEDULED: { color: '#4CAF50', label: 'Retry Sched.' },
+  SEND_PAYMENT_LINK: { color: 'var(--ink-amber)', label: 'Pay Link' },
+  OFFER_DISCOUNT: { color: 'var(--ink-red)', label: 'Discount' },
+  ESCALATE_TO_HUMAN: { color: 'var(--ink-purple)', label: 'Escalate' },
+  ABANDON: { color: 'var(--text-muted)', label: 'Abandon' },
 };
 
 function CustomTooltip({ active, payload }) {
@@ -17,18 +17,17 @@ function CustomTooltip({ active, payload }) {
   return (
     <div style={{
       background: 'var(--surface)',
-      border: '1px solid var(--border)',
-      borderRadius: 8,
-      padding: '10px 14px',
+      border: '1px solid var(--text)',
+      borderRadius: 0,
+      padding: '8px 12px',
       fontFamily: 'var(--font-mono)',
-      fontSize: 12,
-      boxShadow: 'var(--shadow-md)',
+      fontSize: 11,
     }}>
-      <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--text)' }}>{d.name}</div>
-      <div style={{ color: 'var(--green)' }}>Success rate: {d.successRate}%</div>
-      <div style={{ color: 'var(--text-secondary)' }}>Attempts: {d.total}</div>
-      <div style={{ color: 'var(--navy)' }}>Recovered: ₹{d.recovered.toLocaleString('en-IN')}</div>
-      <div style={{ color: 'var(--text-muted)' }}>Cost: ₹{d.cost.toLocaleString('en-IN')}</div>
+      <div style={{ fontWeight: 600, marginBottom: 3, color: 'var(--text)' }}>{d.name}</div>
+      <div>Success: {d.successRate}%</div>
+      <div>Attempts: {d.total}</div>
+      <div>Recovered: ₹{d.recovered.toLocaleString('en-IN')}</div>
+      <div>Cost: ₹{d.cost.toLocaleString('en-IN')}</div>
     </div>
   );
 }
@@ -42,9 +41,9 @@ export default function ActionBreakdownChart() {
 
   if (data.length === 0) {
     return (
-      <div className="card" style={{ padding: '24px 28px', minHeight: 240 }}>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', paddingTop: 80 }}>
-          Loading action breakdown…
+      <div className="panel" style={{ padding: '20px 24px', minHeight: 240 }}>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', paddingTop: 80 }}>
+          LOADING ACTION BREAKDOWN…
         </div>
       </div>
     );
@@ -60,75 +59,64 @@ export default function ActionBreakdownChart() {
   }));
 
   return (
-    <div className="card" style={{ padding: '24px 28px' }}>
-      <div style={{ marginBottom: 20 }}>
+    <div className="panel" style={{ padding: '20px 24px' }}>
+      <div style={{ marginBottom: 16 }}>
         <div style={{
           fontFamily: 'var(--font-display)',
-          fontSize: 16,
+          fontSize: 13,
           fontWeight: 600,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
           color: 'var(--text)',
-          marginBottom: 4,
+          marginBottom: 3,
         }}>
-          Success rate by action
+          Success Rate by Action
         </div>
-        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-          Which interventions actually recover money
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
+          Which interventions recover money
         </div>
       </div>
 
-      <ResponsiveContainer width="100%" height={200}>
+      <ResponsiveContainer width="100%" height={180}>
         <BarChart data={chartData} margin={{ left: -10, right: 10, top: 5, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+          <CartesianGrid strokeDasharray="none" stroke="var(--border)" vertical={false} />
           <XAxis
             dataKey="name"
-            stroke="var(--text-muted)"
-            tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-            axisLine={{ stroke: 'var(--border)' }}
+            stroke="var(--border)"
+            tick={{ fontFamily: 'var(--font-mono)', fontSize: 10, fill: 'var(--text-muted)' }}
           />
           <YAxis
-            stroke="var(--text-muted)"
-            tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+            stroke="var(--border)"
+            tick={{ fontFamily: 'var(--font-mono)', fontSize: 10, fill: 'var(--text-muted)' }}
             domain={[0, 100]}
             tickFormatter={(v) => `${v}%`}
-            axisLine={{ stroke: 'var(--border)' }}
           />
           <Tooltip content={<CustomTooltip />} />
-          <Bar dataKey="successRate" radius={[4, 4, 0, 0]} maxBarSize={48}>
+          <Bar dataKey="successRate" radius={0} maxBarSize={40}>
             {chartData.map((d) => {
               const cfg = ACTION_CONFIG[d.action];
-              return <Cell key={d.action} fill={cfg?.color || '#9CA3AF'} />;
+              return <Cell key={d.action} fill={cfg?.color || 'var(--text-muted)'} />;
             })}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
 
-      <div style={{
-        marginTop: 14,
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 8,
-      }}>
+      <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {chartData.map((d) => {
           const cfg = ACTION_CONFIG[d.action];
           return (
             <div key={d.action} style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 6,
-              padding: '4px 10px',
-              background: 'var(--surface-2)',
-              borderRadius: 6,
-              fontSize: 11,
-              color: 'var(--text-secondary)',
+              gap: 5,
+              padding: '3px 8px',
+              border: 'var(--rule)',
+              fontSize: 10,
               fontFamily: 'var(--font-mono)',
+              color: 'var(--text-secondary)',
             }}>
-              <div style={{
-                width: 8,
-                height: 8,
-                borderRadius: 2,
-                background: cfg?.color || '#9CA3AF',
-              }} />
-              {d.name}: {d.total} tries, ₹{d.recovered.toLocaleString('en-IN')}
+              <span style={{ width: 6, height: 6, background: cfg?.color || 'var(--text-muted)', flexShrink: 0 }} />
+              {d.name}: {d.total}, ₹{d.recovered.toLocaleString('en-IN')}
             </div>
           );
         })}

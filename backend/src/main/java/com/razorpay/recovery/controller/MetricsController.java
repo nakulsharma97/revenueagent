@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/metrics")
@@ -35,5 +36,11 @@ public class MetricsController {
     @GetMapping("/actions")
     public List<ActionBreakdown> actions() {
         return metricsService.actionBreakdown();
+    }
+
+    /** Per-batch metrics history — shows how each run performed. */
+    @GetMapping("/batches")
+    public List<Map<String, Object>> batches() {
+        return metricsService.batchHistory();
     }
 }

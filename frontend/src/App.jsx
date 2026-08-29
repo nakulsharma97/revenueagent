@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import BoundsRegister from './components/BoundsRegister';
 import LedgerTape from './components/LedgerTape';
 import StatCard from './components/StatCard';
 import RecoveryChart from './components/RecoveryChart';
@@ -6,6 +7,7 @@ import FunnelChart from './components/FunnelChart';
 import ActionBreakdownChart from './components/ActionBreakdownChart';
 import AttemptTable from './components/AttemptTable';
 import TransactionModal from './components/TransactionModal';
+import PendingReview from './components/PendingReview';
 import { fetchMetrics, runBatch, exportCsv } from './api';
 
 export default function App() {
@@ -17,6 +19,7 @@ export default function App() {
   const [funnelRefresh, setFunnelRefresh] = useState(0);
   const [batchProgress, setBatchProgress] = useState(null);
   const [selectedAttempt, setSelectedAttempt] = useState(null);
+  const [reviewCount, setReviewCount] = useState(null);
 
   const loadMetrics = useCallback(async () => {
     try {
@@ -28,7 +31,19 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => { loadMetrics(); }, [loadMetrics, funnelRefresh]);
+  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
+
+  const loadReviewCount = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/recovery/pending-review`);
+      if (res.ok) {
+        const data = await res.json();
+        setReviewCount(data.length);
+      }
+    } catch (e) { /* ignore */ }
+  }, [API_BASE]);
+
+  useEffect(() => { loadMetrics(); loadReviewCount(); }, [loadMetrics, loadReviewCount, funnelRefresh]);
 
   async function handleRunBatch() {
     setLoading(true);
@@ -40,17 +55,20 @@ export default function App() {
       const reversed = result.reverse();
       setAttempts(reversed);
       setStreamCount(result.length);
-      // Calculate final recovered amount
       const finalRecovered = reversed.filter(a => a.outcome === 'SUCCESS').reduce((sum, a) => sum + (a.amountRecovered || 0), 0);
       setBatchProgress(prev => prev ? { ...prev, processed: result.length, recoveredAmount: finalRecovered } : null);
       await loadMetrics();
+      await loadReviewCount();
       setFunnelRefresh((n) => n + 1);
       setError(null);
     } catch (e) {
-      setError('Batch run failed — check the backend logs.');
+      if (e.message?.includes('409') || e.message?.includes('already')) {
+        setError('Batch already running — wait for the current batch to complete.');
+      } else {
+        setError('Batch run failed — check the backend logs.');
+      }
     } finally {
       setLoading(false);
-      // Keep progress visible for 2 seconds after completion
       setTimeout(() => setBatchProgress(null), 2000);
     }
   }
@@ -58,302 +76,191 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}>
 
-      {/* ── Header ── */}
-      <header style={{
-        padding: '0 0 0 0',
-        borderBottom: '1px solid var(--border)',
-        background: 'var(--surface)',
-      }}>
-        {/* Top bar */}
-        <div style={{
-          padding: '12px 40px',
-          borderBottom: '1px solid var(--border)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          background: 'var(--navy)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {/* Razorpay-style logo */}
-            <div style={{
-              width: 28,
-              height: 28,
-              background: '#2D89EF',
-              borderRadius: 6,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
-              </svg>
-            </div>
-            <span style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: 'white',
-              letterSpacing: '0.01em',
-            }}>
-              Revenue Recovery Agent
-            </span>
-          </div>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 16,
-            fontSize: 12,
-            color: 'rgba(255,255,255,0.6)',
-          }}>
-            <span>Razorpay AI Buildathon</span>
-            <span style={{
-              padding: '3px 8px',
-              background: 'rgba(255,255,255,0.1)',
-              borderRadius: 4,
-              fontSize: 11,
-              fontWeight: 500,
-              color: 'rgba(255,255,255,0.8)',
-            }}>
-              Track 03
-            </span>
-          </div>
-        </div>
+      {/* ── Statement Header / Letterhead ── */}
+      <header style={{ borderBottom: '2px solid var(--text)', background: 'var(--surface)' }}>
+        {/* Thin ruled line at top */}
+        <div style={{ height: 1, background: 'var(--border)' }} />
 
-        {/* Hero area */}
-        <div style={{
-          padding: '28px 40px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}>
+        <div style={{ padding: '24px 40px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
           <div>
+            <div style={{
+              fontFamily: 'var(--font-display)',
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              color: 'var(--text-muted)',
+              marginBottom: 6,
+            }}>
+              Recovery Ledger — Batch Operations
+            </div>
             <h1 style={{
               fontFamily: 'var(--font-display)',
-              fontSize: 26,
-              margin: 0,
+              fontSize: 28,
               fontWeight: 700,
               color: 'var(--text)',
-              letterSpacing: '-0.02em',
+              letterSpacing: '-0.01em',
+              lineHeight: 1.1,
             }}>
-              AI Revenue Recovery
+              Revenue Recovery Agent
             </h1>
-            <p style={{
-              margin: '4px 0 0',
-              fontSize: 14,
-              color: 'var(--text-secondary)',
-              maxWidth: 480,
-              lineHeight: 1.5,
+            <div style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              color: 'var(--text-muted)',
+              marginTop: 6,
             }}>
-              Detects at-risk payments, decides the right intervention, and executes within hard-coded bounds. Every action passes through the rules engine.
-            </p>
+              Razorpay AI Buildathon · Track 03 · AI Revenue Recovery
+            </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {reviewCount > 0 && (
+              <span style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                color: 'var(--ink-red)',
+                border: '1px solid var(--ink-red)',
+                padding: '3px 8px',
+              }}>
+                {reviewCount} PENDING REVIEW
+              </span>
+            )}
             {loading && (
-              <div style={{
+              <span style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 12,
+                color: 'var(--ink-amber)',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 8,
-                fontSize: 13,
-                color: 'var(--teal)',
-                fontWeight: 500,
+                gap: 6,
               }}>
-                <div style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  background: 'var(--teal)',
-                  animation: 'pulse 1.5s ease-in-out infinite',
-                }} />
-                Processing batch…
-              </div>
+                <span style={{ display: 'inline-block', width: 6, height: 6, background: 'var(--ink-amber)', animation: 'blink 1s step-end infinite' }} />
+                PROCESSING
+              </span>
             )}
             <button
               onClick={handleRunBatch}
               disabled={loading}
               style={{
-                background: loading ? 'var(--surface-2)' : 'var(--navy)',
-                color: loading ? 'var(--text-muted)' : 'white',
-                border: loading ? '1px solid var(--border)' : 'none',
-                borderRadius: 8,
-                padding: '12px 24px',
-                fontFamily: 'var(--font-body)',
+                background: loading ? 'var(--surface-2)' : 'var(--text)',
+                color: loading ? 'var(--text-muted)' : 'var(--bg)',
+                border: 'none',
+                borderRadius: 0,
+                padding: '10px 20px',
+                fontFamily: 'var(--font-display)',
                 fontWeight: 600,
-                fontSize: 14,
+                fontSize: 13,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
                 cursor: loading ? 'not-allowed' : 'pointer',
                 transition: 'all var(--transition-fast)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}
-              onMouseEnter={(e) => {
-                if (!loading) {
-                  e.currentTarget.style.background = 'var(--navy-light)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!loading) {
-                  e.currentTarget.style.background = 'var(--navy)';
-                }
               }}
             >
-              {loading ? (
-                <>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'pulse 1s ease infinite' }}>
-                    <circle cx="12" cy="12" r="10" strokeDasharray="31" strokeDashoffset="10"/>
-                  </svg>
-                  Running…
-                </>
-              ) : (
-                <>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <polygon points="5,3 19,12 5,21"/>
-                  </svg>
-                  Run Recovery Batch
-                </>
-              )}
+              {loading ? '⏳ RUNNING…' : '→ RUN BATCH'}
             </button>
           </div>
         </div>
+        {/* Thin ruled line at bottom */}
+        <div style={{ height: 1, background: 'var(--border)' }} />
       </header>
 
       <LedgerTape attempts={attempts} />
 
-      {/* ── Batch Progress Bar ── */}
+      {/* ── Batch Progress ── */}
       {batchProgress && (
-        <div style={{
-          background: 'var(--surface)',
-          borderBottom: '1px solid var(--border)',
-          padding: '0 40px',
-        }}>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '10px 0',
-            fontSize: 13,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: loading ? 'var(--teal)' : 'var(--green)',
-                animation: loading ? 'pulse 1s ease infinite' : 'none',
-              }} />
-              <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>
-                {loading ? 'Processing batch…' : 'Batch complete'}
+        <div style={{ borderBottom: 'var(--rule)', background: 'var(--surface)', padding: '0 40px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', fontSize: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{
+                fontFamily: 'var(--font-mono)',
+                color: loading ? 'var(--ink-amber)' : 'var(--ink-green)',
+                display: 'flex', alignItems: 'center', gap: 5,
+              }}>
+                <span style={{ width: 5, height: 5, background: loading ? 'var(--ink-amber)' : 'var(--ink-green)', animation: loading ? 'blink 0.8s step-end infinite' : 'none' }} />
+                {loading ? 'PROCESSING' : 'COMPLETE'}
               </span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
-                {batchProgress.processed} / {batchProgress.total} transactions
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                {batchProgress.processed}/{batchProgress.total}
               </span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--green)', fontWeight: 600 }}>
-                +₹{batchProgress.recoveredAmount.toLocaleString('en-IN')} recovered
-              </span>
-            </div>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--ink-green)' }}>
+              +₹{batchProgress.recoveredAmount.toLocaleString('en-IN')}
+            </span>
           </div>
-          {/* Progress bar */}
-          <div style={{
-            height: 3,
-            background: 'var(--surface-2)',
-            borderRadius: 2,
-            overflow: 'hidden',
-            marginBottom: 2,
-          }}>
-            <div style={{
-              height: '100%',
-              width: `${(batchProgress.processed / batchProgress.total) * 100}%`,
-              background: loading ? 'var(--teal)' : 'var(--green)',
-              borderRadius: 2,
-              transition: 'width 0.3s ease',
-            }} />
+          <div style={{ height: 2, background: 'var(--surface-2)', marginBottom: 1 }}>
+            <div style={{ height: '100%', width: `${(batchProgress.processed / batchProgress.total) * 100}%`, background: loading ? 'var(--ink-amber)' : 'var(--ink-green)', transition: 'width 0.2s linear' }} />
           </div>
         </div>
       )}
 
-      <main style={{ padding: '28px 40px', display: 'flex', flexDirection: 'column', gap: 24, flex: 1, maxWidth: 1400, margin: '0 auto', width: '100%' }}>
+      <main style={{ padding: '20px 40px', display: 'flex', flexDirection: 'column', gap: 20, flex: 1, maxWidth: 1400, margin: '0 auto', width: '100%' }}>
+
+        {/* ══ SECTION 1: BOUNDS REGISTER ══ — must be above the fold, before any chart */}
+        <BoundsRegister />
 
         {error && (
           <div className="animate-in" style={{
             background: 'var(--red-bg)',
-            border: '1px solid #FECACA',
-            color: 'var(--red)',
-            padding: '12px 16px',
-            borderRadius: 8,
-            fontSize: 13,
+            border: '1px solid var(--ink-red)',
+            color: 'var(--ink-red)',
+            padding: '10px 14px',
+            fontSize: 12,
+            fontFamily: 'var(--font-mono)',
             fontWeight: 500,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
           }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            {error}
+            ✕ {error}
           </div>
         )}
 
-        {/* ── Stat Cards ── */}
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        {/* ══ SECTION 2: SUMMARY STATEMENT ══ — ledger line-items */}
+        <div style={{ display: 'flex', gap: 0, flexWrap: 'wrap' }}>
+          <StatCard label="Transactions at risk" value={metrics?.totalAtRisk ?? '—'} />
+          <StatCard label="Recovered" value={metrics?.recoveredCount ?? '—'} accent="green" />
+          <StatCard label="Recovery rate" value={metrics ? `${metrics.recoveryRatePercent}%` : '—'} accent="blue" />
           <StatCard
-            label="At-risk transactions"
-            value={metrics?.totalAtRisk ?? '—'}
-          />
-          <StatCard
-            label="Recovered"
-            value={metrics?.recoveredCount ?? '—'}
-            accent="green"
-          />
-          <StatCard
-            label="Recovery rate"
-            value={metrics ? `${metrics.recoveryRatePercent}%` : '—'}
-            accent="blue"
-          />
-          <StatCard
-            label="Net revenue recovered"
+            label="Net revenue"
             value={metrics ? `₹${Number(metrics.netRecovered).toLocaleString('en-IN')}` : '—'}
             accent="gold"
             sub={metrics ? `₹${Number(metrics.revenueRecovered).toLocaleString('en-IN')} recovered − ₹${Number(metrics.interventionCost).toFixed(0)} cost` : undefined}
           />
         </div>
 
-        {/* ── Main Chart ── */}
+        {/* ══ SECTION 3: NET RECOVERED VS BASELINE ══ — the brief's headline chart */}
         {metrics && <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} />}
 
-        {/* ── Two-column charts ── */}
-        <div style={{ display: 'flex', gap: 20 }}>
-          <div style={{ flex: 1 }}><FunnelChart key={funnelRefresh} /></div>
+        {/* ══ SECTION 4: FUNNEL + ACTION BREAKDOWN ══ */}
+        <div style={{ display: 'flex', gap: 0 }}>
+          <div style={{ flex: 1, borderRight: 'var(--rule)' }}><FunnelChart key={funnelRefresh} /></div>
           <div style={{ flex: 1 }}><ActionBreakdownChart key={funnelRefresh} /></div>
         </div>
 
-        {/* ── Decision Table ── */}
+        {/* ══ SECTION 5: PENDING HUMAN REVIEW ══ — proof of bounded workflow */}
+        <PendingReview key={funnelRefresh} />
+
+        {/* ══ SECTION 6: DECISION LEDGER ══ */}
         <div>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: 12,
-          }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{
+              <span style={{
                 fontFamily: 'var(--font-display)',
-                fontSize: 16,
+                fontSize: 13,
                 fontWeight: 600,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
                 color: 'var(--text)',
               }}>
-                Agent decisions this batch
-              </div>
+                Decision Ledger
+              </span>
               {streamCount !== null && (
                 <span style={{
                   fontFamily: 'var(--font-mono)',
                   fontSize: 11,
                   color: 'var(--text-muted)',
-                  background: 'var(--surface-2)',
-                  padding: '2px 8px',
-                  borderRadius: 4,
+                  border: 'var(--rule)',
+                  padding: '1px 6px',
                 }}>
-                  {streamCount} processed
+                  {streamCount} entries
                 </span>
               )}
             </div>
@@ -361,32 +268,22 @@ export default function App() {
               onClick={exportCsv}
               style={{
                 background: 'transparent',
-                color: 'var(--text-secondary)',
-                border: '1px solid var(--border)',
-                borderRadius: 6,
-                padding: '6px 12px',
-                fontFamily: 'var(--font-body)',
-                fontSize: 12,
+                color: 'var(--text-muted)',
+                border: 'var(--rule)',
+                borderRadius: 0,
+                padding: '5px 12px',
+                fontFamily: 'var(--font-display)',
+                fontSize: 11,
                 fontWeight: 500,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
                 cursor: 'pointer',
                 transition: 'all var(--transition-fast)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
               }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = 'var(--border-hover)';
-                e.currentTarget.style.background = 'var(--surface-hover)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = 'var(--border)';
-                e.currentTarget.style.background = 'transparent';
-              }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--text)'; e.currentTarget.style.color = 'var(--text)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-muted)'; }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-              </svg>
-              Export CSV
+              ↓ EXPORT CSV
             </button>
           </div>
           <AttemptTable attempts={attempts} onSelectAttempt={setSelectedAttempt} />
@@ -398,32 +295,18 @@ export default function App() {
         <TransactionModal attempt={selectedAttempt} onClose={() => setSelectedAttempt(null)} />
       )}
 
-      {/* ── Footer ── */}
-      <footer style={{
-        padding: '16px 40px',
-        borderTop: '1px solid var(--border)',
-        background: 'var(--surface)',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-      }}>
-        <span style={{
-          fontSize: 12,
-          color: 'var(--text-muted)',
-        }}>
-          Every action passed through{' '}
-          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', fontSize: 11 }}>
-            RulesEngine.enforceBounds()
+      {/* ══ FOOTER / COLOPHON ══ */}
+      <footer style={{ borderTop: '2px solid var(--text)', background: 'var(--surface)', padding: '12px 40px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
+            RulesEngine.enforceBounds() — every action validated before execution
           </span>
-          {' '}before executing
-        </span>
-        <span style={{
-          fontSize: 11,
-          color: 'var(--text-muted)',
-          fontFamily: 'var(--font-mono)',
-        }}>
-          The LLM proposes · The rules engine disposes
-        </span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
+            <a href="#" style={{ color: 'var(--ink-blue)', textDecoration: 'none' }} onClick={(e) => { e.preventDefault(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>↑ BACK TO BOUNDS REGISTER</a>
+            {' · '}
+            LLM proposes · Rules engine disposes
+          </span>
+        </div>
       </footer>
     </div>
   );

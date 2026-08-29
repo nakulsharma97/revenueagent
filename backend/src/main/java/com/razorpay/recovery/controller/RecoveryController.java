@@ -9,7 +9,6 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.io.StringWriter;
 import java.util.List;
 
 @RestController
@@ -61,22 +60,34 @@ public class RecoveryController {
         return transactionRepository.findAll();
     }
 
+    /**
+     * Attempts that require human review before execution — per the brief's bounded-workflow rule:
+     * "anything above the discount ceiling, or a 3rd consecutive failure."
+     */
+    @GetMapping("/pending-review")
+    public List<RecoveryAttempt> pendingReview() {
+        return attemptRepository.findByRequiresHumanSignoffTrue();
+    }
+
     /** Export all recovery attempts as CSV. */
     @GetMapping(value = "/export", produces = "text/csv")
     public String exportCsv() {
         List<RecoveryAttempt> attempts = attemptRepository.findAll();
-        StringWriter sw = new StringWriter();
-        sw.write("Txn ID,Action,Reasoning,Confidence,Outcome,Amount Recovered,Intervention Cost,LLM Driven\n");
+        StringBuilder sw = new StringBuilder();
+        sw.append("Txn ID,Batch ID,Action,Reasoning,Confidence,Outcome,Amount Recovered,Intervention Cost,LLM Driven,Requires Signoff,Signoff Reason\n");
         for (RecoveryAttempt a : attempts) {
-            sw.write(String.format("%d,%s,\"%s\",%.2f,%s,%.2f,%.2f,%s\n",
+            sw.append(String.format("%d,%s,%s,\"%s\",%.2f,%s,%.2f,%.2f,%s,%s,\"%s\"\n",
                     a.getTransaction() != null ? a.getTransaction().getId() : 0,
+                    a.getBatchId() != null ? a.getBatchId() : "",
                     a.getActionTaken(),
                     a.getReasoning() != null ? a.getReasoning().replace("\"", "\"\"") : "",
                     a.getConfidence(),
                     a.getOutcome(),
                     a.getAmountRecovered(),
                     a.getInterventionCost(),
-                    a.isLlmDriven()
+                    a.isLlmDriven(),
+                    a.isRequiresHumanSignoff(),
+                    a.getSignoffReason() != null ? a.getSignoffReason().replace("\"", "\"\"") : ""
             ));
         }
         return sw.toString();

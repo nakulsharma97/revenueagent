@@ -26,7 +26,10 @@ export async function fetchTransactions() {
 
 export async function runBatch() {
   const res = await fetch(`${API_BASE}/api/recovery/run-batch`, { method: 'POST' });
-  if (!res.ok) throw new Error('run-batch failed');
+  if (!res.ok) {
+    if (res.status === 409) throw new Error('409 Batch already running');
+    throw new Error('run-batch failed');
+  }
   return res.json();
 }
 
@@ -45,6 +48,12 @@ export function runBatchStream(onAttempt, onDone) {
     onDone(-1);
   };
   return es;
+}
+
+export async function fetchPendingReview() {
+  const res = await fetch(`${API_BASE}/api/recovery/pending-review`);
+  if (!res.ok) throw new Error('pending-review fetch failed');
+  return res.json();
 }
 
 export function exportCsv() {

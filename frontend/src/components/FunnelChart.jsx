@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import { fetchFunnel } from '../api';
 
 const STAGE_CONFIG = {
-  AT_RISK: { color: '#DC2626', label: 'At Risk' },
-  IN_RECOVERY: { color: '#D97706', label: 'In Recovery' },
-  RECOVERED: { color: '#059669', label: 'Recovered' },
-  LOST: { color: '#6B7280', label: 'Lost' },
+  AT_RISK: { color: 'var(--ink-red)', label: 'At Risk' },
+  IN_RECOVERY: { color: 'var(--ink-amber)', label: 'In Recovery' },
+  RECOVERED: { color: 'var(--ink-green)', label: 'Recovered' },
+  LOST: { color: 'var(--text-muted)', label: 'Lost' },
 };
 
 export default function FunnelChart() {
@@ -17,9 +17,9 @@ export default function FunnelChart() {
 
   if (!funnel) {
     return (
-      <div className="card" style={{ padding: '24px 28px', minHeight: 240 }}>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', paddingTop: 80 }}>
-          Loading funnel data…
+      <div className="panel" style={{ padding: '20px 24px', minHeight: 240 }}>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)', textAlign: 'center', paddingTop: 80 }}>
+          LOADING FUNNEL…
         </div>
       </div>
     );
@@ -34,63 +34,47 @@ export default function FunnelChart() {
   ];
 
   return (
-    <div className="card" style={{ padding: '24px 28px' }}>
-      <div style={{ marginBottom: 20 }}>
+    <div className="panel" style={{ padding: '20px 24px' }}>
+      <div style={{ marginBottom: 16 }}>
         <div style={{
           fontFamily: 'var(--font-display)',
-          fontSize: 16,
+          fontSize: 13,
           fontWeight: 600,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
           color: 'var(--text)',
-          marginBottom: 4,
+          marginBottom: 3,
         }}>
-          Recovery pipeline
+          Recovery Pipeline
         </div>
-        <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-          Transaction status across the pipeline
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>
+          Transaction status distribution
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, height: 150, alignItems: 'flex-end' }}>
+      <div style={{ display: 'flex', gap: 6, height: 140, alignItems: 'flex-end' }}>
         {stages.map((s) => {
           const cfg = STAGE_CONFIG[s.key];
           const pct = (s.value / total) * 100;
-          const barHeight = Math.max(pct * 1.4, s.value > 0 ? 8 : 2);
+          const barHeight = Math.max(pct * 1.4, s.value > 0 ? 6 : 2);
 
           return (
-            <div key={s.key} style={{
-              flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 8,
-            }}>
-              <span style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 14,
-                fontWeight: 700,
-                color: 'var(--text)',
-              }}>
+            <div key={s.key} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
                 {s.value}
               </span>
-
               <div style={{
                 width: '100%',
                 height: `${barHeight}px`,
                 background: cfg.color,
-                borderRadius: 4,
-                transition: 'height 0.5s ease',
+                borderRadius: 0,
+                transition: 'height 0.3s ease',
               }} />
-
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 500 }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-secondary)', fontWeight: 500 }}>
                   {cfg.label}
                 </div>
-                <div style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 10,
-                  color: 'var(--text-muted)',
-                  marginTop: 2,
-                }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>
                   {pct.toFixed(1)}%
                 </div>
               </div>
@@ -100,21 +84,20 @@ export default function FunnelChart() {
       </div>
 
       <div style={{
-        marginTop: 16,
-        padding: '10px 14px',
+        marginTop: 12,
+        padding: '8px 10px',
         background: 'var(--surface-2)',
-        borderRadius: 8,
         display: 'flex',
         justifyContent: 'space-between',
-        fontSize: 12,
-        color: 'var(--text-muted)',
+        fontSize: 11,
         fontFamily: 'var(--font-mono)',
+        color: 'var(--text-muted)',
       }}>
         <span>{funnel.succeededAttempts} succeeded</span>
-        <span style={{ color: 'var(--border)' }}>·</span>
+        <span>│</span>
         <span>{funnel.failedAttempts} failed</span>
-        <span style={{ color: 'var(--border)' }}>·</span>
-        <span>{funnel.pendingAttempts} pending</span>
+        <span>│</span>
+        <span>{funnel.pendingAttempts} skipped</span>
       </div>
     </div>
   );

@@ -9,6 +9,7 @@ public record BatchMetrics(
         BigDecimal interventionCost,
         BigDecimal netRecovered,
         double recoveryRatePercent,
-        BigDecimal baselineNetRecovered   // naive "retry once" comparison, for the demo chart
+        BigDecimal baselineNetRecovered,   // naive "retry once" comparison, for the demo chart
+        long baselineRecoveryCount          // how many the naive baseline would have recovered
 ) {
 }

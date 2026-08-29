@@ -1,5 +1,7 @@
 package com.razorpay.recovery.service;
 
+import com.razorpay.recovery.config.BoundsConfig;
+import com.razorpay.recovery.dto.DecisionResult;
 import com.razorpay.recovery.dto.LlmDecision;
 import com.razorpay.recovery.model.RecoveryAttempt.RecoveryAction;
 import com.razorpay.recovery.model.Transaction;
@@ -17,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Unit tests for DecisionAgentService — confirms the heuristic fallback path
  * returns a valid LlmDecision for every FailureReason without throwing.
+ * Tests the original decide() method signature.
  */
 class DecisionAgentServiceTest {
 
@@ -24,10 +27,12 @@ class DecisionAgentServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        RulesEngine rulesEngine = new RulesEngine();
-        setField(rulesEngine, "maxRetries", 3);
-        setField(rulesEngine, "maxDiscountPercent", 15);
-        setField(rulesEngine, "minAmountForDiscount", new BigDecimal("500"));
+        BoundsConfig boundsConfig = new BoundsConfig();
+        boundsConfig.setMaxRetries(3);
+        boundsConfig.setMaxDiscountPercent(15);
+        boundsConfig.setMinAmountForDiscount(new BigDecimal("500"));
+        boundsConfig.setRetryCooldownMinutes(60);
+        RulesEngine rulesEngine = new RulesEngine(boundsConfig);
 
         decisionAgentService = new DecisionAgentService(rulesEngine);
         // Force heuristic fallback path (no LLM)
@@ -41,7 +46,7 @@ class DecisionAgentServiceTest {
     void heuristicFallback_returnsValidDecisionForEveryFailureReason(FailureReason reason) throws Exception {
         Transaction tx = buildTx(reason, 0, new BigDecimal("1000"));
 
-        // Should never throw
+        // Should never throw — decide() returns LlmDecision
         LlmDecision decision = decisionAgentService.decide(tx);
 
         assertNotNull(decision, "Decision must not be null for " + reason);
@@ -52,10 +57,12 @@ class DecisionAgentServiceTest {
                 "Confidence must be in [0, 1] for " + reason);
 
         // Verify the chosen action is actually in the eligible set
-        RulesEngine rulesEngine = new RulesEngine();
-        setField(rulesEngine, "maxRetries", 3);
-        setField(rulesEngine, "maxDiscountPercent", 15);
-        setField(rulesEngine, "minAmountForDiscount", new BigDecimal("500"));
+        BoundsConfig bc = new BoundsConfig();
+        bc.setMaxRetries(3);
+        bc.setMaxDiscountPercent(15);
+        bc.setMinAmountForDiscount(new BigDecimal("500"));
+        bc.setRetryCooldownMinutes(60);
+        RulesEngine rulesEngine = new RulesEngine(bc);
         assertTrue(rulesEngine.eligibleActions(tx).contains(decision.action()),
                 "Chosen action " + decision.action() + " must be in eligible set for " + reason);
     }
@@ -109,7 +116,6 @@ class DecisionAgentServiceTest {
         LlmDecision decision = decisionAgentService.decide(tx);
 
         // When retries exhausted, eligible = {SEND_PAYMENT_LINK, ESCALATE_TO_HUMAN, ABANDON}
-        // Heuristic prefers SEND_PAYMENT_LINK (gentler nudge) before ESCALATE
         assertTrue(decision.action() == RecoveryAction.SEND_PAYMENT_LINK
                         || decision.action() == RecoveryAction.ESCALATE_TO_HUMAN,
                 "Exhausted retries should use payment link or escalate, got: " + decision.action());
@@ -117,36 +123,34 @@ class DecisionAgentServiceTest {
 
     @Test
     void decide_alwaysPassesThroughEnforceBounds() throws Exception {
-        // Even if the heuristic returned something odd, enforceBounds should still validate
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
 
         LlmDecision decision = decisionAgentService.decide(tx);
 
-        // The result should always be a valid action from the eligible set
-        RulesEngine rulesEngine = new RulesEngine();
-        setField(rulesEngine, "maxRetries", 3);
-        setField(rulesEngine, "maxDiscountPercent", 15);
-        setField(rulesEngine, "minAmountForDiscount", new BigDecimal("500"));
+        BoundsConfig bc = new BoundsConfig();
+        bc.setMaxRetries(3);
+        bc.setMaxDiscountPercent(15);
+        bc.setMinAmountForDiscount(new BigDecimal("500"));
+        bc.setRetryCooldownMinutes(60);
+        RulesEngine rulesEngine = new RulesEngine(bc);
         assertTrue(rulesEngine.eligibleActions(tx).contains(decision.action()),
                 "Final decision must always be within the rules-engine bounds");
     }
 
     @Test
     void invalidApiKey_fallsBackToHeuristic_withoutCrashing() throws Exception {
-        // Simulate what happens when LLM is enabled but the API key is invalid.
-        // callLlm() will throw (401 / connection refused), catch block should
-        // fall through to heuristicFallback() instead of propagating the exception.
-        RulesEngine rulesEngine = new RulesEngine();
-        setField(rulesEngine, "maxRetries", 3);
-        setField(rulesEngine, "maxDiscountPercent", 15);
-        setField(rulesEngine, "minAmountForDiscount", new BigDecimal("500"));
+        BoundsConfig bc = new BoundsConfig();
+        bc.setMaxRetries(3);
+        bc.setMaxDiscountPercent(15);
+        bc.setMinAmountForDiscount(new BigDecimal("500"));
+        bc.setRetryCooldownMinutes(60);
+        RulesEngine rulesEngine = new RulesEngine(bc);
 
         DecisionAgentService service = new DecisionAgentService(rulesEngine);
         setField(service, "llmEnabled", true);
         setField(service, "apiKey", "sk-ant-INVALID-KEY-FOR-TESTING");
         setField(service, "model", "claude-sonnet-4-6");
 
-        // Run across every FailureReason — none should throw
         for (FailureReason reason : FailureReason.values()) {
             Transaction tx = buildTx(reason, 0, new BigDecimal("1000"));
             LlmDecision decision = service.decide(tx);
@@ -156,6 +160,62 @@ class DecisionAgentServiceTest {
             assertTrue(rulesEngine.eligibleActions(tx).contains(decision.action()),
                     "Fallback action must be within bounds for " + reason);
         }
+    }
+
+    // ── decideWithMeta tests ─────────────────────────────────────────
+
+    @Test
+    void decideWithMeta_heuristic_llmDrivenIsFalse() throws Exception {
+        Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
+
+        DecisionResult result = decisionAgentService.decideWithMeta(tx);
+
+        assertNotNull(result);
+        assertFalse(result.llmDriven(), "Heuristic path must set llmDriven=false");
+        assertNotNull(result.decision());
+    }
+
+    @Test
+    void decideWithMeta_invalidApiKey_llmDrivenIsFalse() throws Exception {
+        BoundsConfig bc = new BoundsConfig();
+        bc.setMaxRetries(3);
+        bc.setMaxDiscountPercent(15);
+        bc.setMinAmountForDiscount(new BigDecimal("500"));
+        bc.setRetryCooldownMinutes(60);
+        RulesEngine rulesEngine = new RulesEngine(bc);
+
+        DecisionAgentService service = new DecisionAgentService(rulesEngine);
+        setField(service, "llmEnabled", true);
+        setField(service, "apiKey", "sk-ant-INVALID-KEY-FOR-TESTING");
+        setField(service, "model", "claude-sonnet-4-6");
+
+        for (FailureReason reason : FailureReason.values()) {
+            Transaction tx = buildTx(reason, 0, new BigDecimal("1000"));
+            DecisionResult result = service.decideWithMeta(tx);
+
+            assertFalse(result.llmDriven(),
+                    "Invalid API key must fall back to heuristic with llmDriven=false for " + reason);
+        }
+    }
+
+    @Test
+    void decideWithMeta_thirdFailure_flagsSignoff() throws Exception {
+        Transaction tx = buildTx(FailureReason.INSUFFICIENT_FUNDS, 2, new BigDecimal("1000"));
+
+        DecisionResult result = decisionAgentService.decideWithMeta(tx);
+
+        assertTrue(result.requiresHumanSignoff(),
+                "retryCount=2 (3rd failure) must require human sign-off");
+    }
+
+    @Test
+    void decideWithMeta_firstFailure_noSignoff() throws Exception {
+        Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
+
+        DecisionResult result = decisionAgentService.decideWithMeta(tx);
+
+        assertFalse(result.requiresHumanSignoff(),
+                "retryCount=0 should NOT require sign-off");
     }
 
     // ── helpers ────────────────────────────────────────────────────────

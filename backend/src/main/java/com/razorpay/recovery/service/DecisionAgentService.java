@@ -2,11 +2,12 @@ package com.razorpay.recovery.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.razorpay.recovery.dto.DecisionResult;
+import com.razorpay.recovery.dto.EnforcedDecision;
 import com.razorpay.recovery.dto.LlmDecision;
 import com.razorpay.recovery.model.RecoveryAttempt.RecoveryAction;
 import com.razorpay.recovery.model.Transaction;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
@@ -45,14 +46,57 @@ public class DecisionAgentService {
         this.rulesEngine = rulesEngine;
     }
 
+    /**
+     * Original entry point — returns just the bounded LlmDecision.
+     * Existing tests and callers depend on this signature staying stable.
+     */
     public LlmDecision decide(Transaction tx) {
         List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx);
 
-        LlmDecision proposed = llmEnabled && apiKey != null && !apiKey.isBlank()
-                ? callLlm(tx, eligible)
-                : heuristicFallback(tx, eligible);
+        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
+        LlmDecision proposed;
+        if (usedLlm) {
+            LlmDecision llmResult = callLlm(tx, eligible);
+            usedLlm = !llmResult.reasoning().startsWith("Rules-only mode:");
+            proposed = llmResult;
+        } else {
+            proposed = heuristicFallback(tx, eligible);
+        }
 
-        return rulesEngine.enforceBounds(tx, proposed);
+        EnforcedDecision enforced = rulesEngine.enforceBounds(tx, proposed);
+        return enforced.decision();
+    }
+
+    /**
+     * Additive entry point — returns full metadata including whether the LLM
+     * was actually used, and whether human sign-off is required.
+     * Orchestrator uses this; existing tests keep using decide().
+     */
+    public DecisionResult decideWithMeta(Transaction tx) {
+        List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx);
+
+        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
+        LlmDecision proposed;
+        if (usedLlm) {
+            LlmDecision llmResult = callLlm(tx, eligible);
+            usedLlm = !llmResult.reasoning().startsWith("Rules-only mode:");
+            proposed = llmResult;
+        } else {
+            proposed = heuristicFallback(tx, eligible);
+        }
+
+        EnforcedDecision enforced = rulesEngine.enforceBounds(tx, proposed);
+        // Compute the full signoff signal: enforceBounds flags discount caps;
+        // RulesEngine.requiresHumanSignoff() also checks 3rd consecutive failure.
+        boolean signoffFromEnforced = enforced.requiresHumanSignoff();
+        boolean signoffFromRules = rulesEngine.requiresHumanSignoff(tx, proposed);
+        boolean signoffRequired = signoffFromEnforced || signoffFromRules;
+        String signoffReason = signoffFromEnforced ? enforced.signoffReason() : null;
+        if (!signoffFromEnforced && signoffFromRules && tx.getRetryCount() >= 2) {
+            signoffReason = "3rd consecutive failure — requires human review before final disposition.";
+        }
+
+        return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
     }
 
     private LlmDecision callLlm(Transaction tx, List<RecoveryAction> eligible) {
@@ -86,7 +130,6 @@ public class DecisionAgentService {
                             ? decision.get("discountPercent").asInt() : null
             );
         } catch (Exception e) {
-            // Never let a flaky network/API call take the pipeline down mid-batch.
             return heuristicFallback(tx, eligible);
         }
     }

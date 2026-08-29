@@ -7,6 +7,7 @@ import com.razorpay.recovery.model.RecoveryAttempt;
 import com.razorpay.recovery.model.RecoveryAttempt.AttemptOutcome;
 import com.razorpay.recovery.model.RecoveryAttempt.RecoveryAction;
 import com.razorpay.recovery.model.Transaction;
+import com.razorpay.recovery.model.Transaction.FailureReason;
 import com.razorpay.recovery.model.Transaction.TransactionStatus;
 import com.razorpay.recovery.repository.RecoveryAttemptRepository;
 import com.razorpay.recovery.repository.TransactionRepository;
@@ -14,12 +15,16 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 /**
  * Turns raw attempt/transaction rows into the "honest metrics" the brief asks for —
- * revenue recovered net of intervention cost, plus a naive baseline for comparison.
+ * revenue recovered net of intervention cost, plus a simulated naive baseline.
+ *
+ * The baseline is NOT a hardcoded percentage — it runs the SAME probability model
+ * that MockPaymentGatewayService uses, but with exactly ONE retry per transaction,
+ * no discounts, no payment links, no LLM, and zero intervention cost. This makes
+ * the agent-vs-baseline comparison apples-to-apples on the SAME batch.
  */
 @Service
 public class MetricsService {
@@ -37,6 +42,7 @@ public class MetricsService {
         List<RecoveryAttempt> attempts = attemptRepository.findAll();
 
         long totalAtRisk = all.size();
+        // Only count real outcomes (SUCCESS/FAILED), not PENDING (cooldown-skip rows).
         long recoveredCount = attempts.stream()
                 .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
 
@@ -54,13 +60,9 @@ public class MetricsService {
         double recoveryRate = totalAtRisk == 0 ? 0
                 : (recoveredCount * 100.0) / totalAtRisk;
 
-        // Baseline: what a naive "retry every failure exactly once, no discounts, no LLM" policy
-        // would have recovered — a flat 35% blended success rate, no intervention cost tracked.
-        BigDecimal baselineRecovered = all.stream()
-                .map(Transaction::getAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add)
-                .multiply(BigDecimal.valueOf(0.35))
-                .setScale(2, RoundingMode.HALF_UP);
+        // Simulate the naive baseline: one retry per transaction, no discounts,
+        // no LLM, same probability model as MockPaymentGatewayService.
+        BaselineResult baseline = simulateBaseline(all);
 
         return new BatchMetrics(
                 totalAtRisk,
@@ -69,8 +71,45 @@ public class MetricsService {
                 interventionCost.setScale(2, RoundingMode.HALF_UP),
                 netRecovered.setScale(2, RoundingMode.HALF_UP),
                 Math.round(recoveryRate * 100.0) / 100.0,
-                baselineRecovered
+                baseline.recovered.setScale(2, RoundingMode.HALF_UP),
+                baseline.count
         );
+    }
+
+    /**
+     * Simulates a naive "retry every transaction exactly once" baseline.
+     * Uses the same success-probability model as MockPaymentGatewayService
+     * but with a deterministic seed so results are reproducible across calls.
+     * No discounts, no payment links, no intervention cost — just a raw retry.
+     */
+    BaselineResult simulateBaseline(List<Transaction> transactions) {
+        // Deterministic seed: same batch always produces the same baseline.
+        Random baselineRandom = new Random(42);
+        long count = 0;
+        BigDecimal total = BigDecimal.ZERO;
+
+        for (Transaction tx : transactions) {
+            double successProbability = switch (tx.getFailureReason()) {
+                case NETWORK_ERROR -> 0.75;
+                case BANK_SERVER_DOWN -> 0.6;
+                case INSUFFICIENT_FUNDS -> 0.35;
+                case CARD_EXPIRED, INVALID_CVV, CARD_STOLEN_FLAG -> 0.02;
+            };
+            // Same reliability adjustment as MockPaymentGatewayService
+            double adjusted = Math.min(0.95, successProbability
+                    + (tx.getSubscription().getCustomer().getPaymentReliabilityScore() - 0.5) * 0.2);
+
+            if (baselineRandom.nextDouble() < adjusted) {
+                count++;
+                total = total.add(tx.getAmount());
+            }
+        }
+
+        return new BaselineResult(count, total);
+    }
+
+    /** Internal result of baseline simulation. */
+    record BaselineResult(long count, BigDecimal recovered) {
     }
 
     /** Status distribution across the recovery pipeline. */
@@ -88,6 +127,49 @@ public class MetricsService {
         long failedAttempts = attempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.FAILED).count();
 
         return new FunnelData(atRisk, inRecovery, recovered, lost, pendingAttempts, succeededAttempts, failedAttempts);
+    }
+
+    /** Per-batch metrics history. */
+    public List<Map<String, Object>> batchHistory() {
+        List<RecoveryAttempt> attempts = attemptRepository.findAll();
+        // Group by batchId
+        Map<String, List<RecoveryAttempt>> byBatch = new LinkedHashMap<>();
+        for (RecoveryAttempt a : attempts) {
+            String bid = a.getBatchId();
+            if (bid == null) bid = "unknown";
+            byBatch.computeIfAbsent(bid, k -> new ArrayList<>()).add(a);
+        }
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        int batchNum = 0;
+        for (Map.Entry<String, List<RecoveryAttempt>> entry : byBatch.entrySet()) {
+            List<RecoveryAttempt> batchAttempts = entry.getValue();
+            long total = batchAttempts.size();
+            long succeeded = batchAttempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
+            long failed = batchAttempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.FAILED).count();
+            long skipped = batchAttempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.PENDING).count();
+            BigDecimal recovered = batchAttempts.stream()
+                    .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS)
+                    .map(RecoveryAttempt::getAmountRecovered)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal cost = batchAttempts.stream()
+                    .map(RecoveryAttempt::getInterventionCost)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            batchNum++;
+            result.add(Map.of(
+                    "batchNumber", batchNum,
+                    "batchId", entry.getKey(),
+                    "totalAttempts", total,
+                    "succeeded", succeeded,
+                    "failed", failed,
+                    "skipped", skipped,
+                    "revenueRecovered", recovered.setScale(2, RoundingMode.HALF_UP),
+                    "interventionCost", cost.setScale(2, RoundingMode.HALF_UP),
+                    "netRecovered", recovered.subtract(cost).setScale(2, RoundingMode.HALF_UP)
+            ));
+        }
+        return result;
     }
 
     /** Per-action success rate breakdown. */

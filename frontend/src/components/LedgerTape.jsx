@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import './LedgerTape.css';
 
-/** Signature element: a live ticker of recovery outcomes, styled like an exchange tape. */
+/** Teleprinter-style ticker of recovery outcomes — monospace, fixed-width, scan-line feel. */
 export default function LedgerTape({ attempts }) {
+  const [hoveredId, setHoveredId] = useState(null);
   const entries = attempts.length > 0 ? attempts : [{ placeholder: true }];
   const doubled = [...entries, ...entries];
 
@@ -9,19 +11,39 @@ export default function LedgerTape({ attempts }) {
     <div className="ledger-tape">
       <div className="ledger-tape__track">
         {doubled.map((a, i) => (
-          <span key={i} className={`ledger-tape__item ${a.outcome === 'SUCCESS' ? 'is-win' : a.outcome === 'FAILED' ? 'is-loss' : ''}`}>
+          <span
+            key={i}
+            className={`ledger-tape__item ${a.outcome === 'SUCCESS' ? 'is-win' : a.outcome === 'FAILED' ? 'is-loss' : a.outcome === 'PENDING' ? 'is-pending' : ''}`}
+            onMouseEnter={() => !a.placeholder && setHoveredId(a.id || i)}
+            onMouseLeave={() => setHoveredId(null)}
+            style={{ position: 'relative' }}
+          >
             {a.placeholder ? (
-              'Run a batch to populate the ledger tape —'
+              'Awaiting batch run — data will appear here'
             ) : (
               <>
-                #{a.transaction?.id ?? '—'}{' '}
+                TXN#{String(a.transaction?.id ?? '—').padStart(4, '0')}{' '}
                 <strong>{a.actionTaken?.replaceAll('_', ' ')}</strong>{' '}
-                {a.outcome === 'SUCCESS' ? `+₹${Number(a.amountRecovered).toLocaleString('en-IN')}` : a.outcome}
+                {a.outcome === 'SUCCESS'
+                  ? `+₹${Number(a.amountRecovered).toLocaleString('en-IN')}`
+                  : a.outcome === 'PENDING'
+                    ? 'SKIPPED'
+                    : a.outcome}
+                {a.llmDriven ? ' [LLM]' : ''}
+                {hoveredId === (a.id || i) && a.reasoning && (
+                  <span className="ledger-tape__tooltip">
+                    {a.reasoning}
+                    {a.requiresHumanSignoff && (
+                      <span className="ledger-tape__tooltip-signoff"> ⚠ REQUIRES SIGNOFF: {a.signoffReason}</span>
+                    )}
+                  </span>
+                )}
               </>
             )}
-            <span className="ledger-tape__dot">·</span>
+            <span className="ledger-tape__dot">│</span>
           </span>
         ))}
+        <span className="ledger-tape__cursor" />
       </div>
     </div>
   );
