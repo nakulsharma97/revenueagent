@@ -33,3 +33,9 @@ logs/
 *.db
 *.mv.db
 *.trace.db
+
+# Freebuff / editor tooling
+.freebuff/
+
+# Stray build logs
+*.err
