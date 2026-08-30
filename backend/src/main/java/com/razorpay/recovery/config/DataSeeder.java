@@ -18,6 +18,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Random;
+import org.springframework.transaction.annotation.Transactional;
 
 @Component
 public class DataSeeder implements CommandLineRunner {
@@ -27,6 +28,7 @@ public class DataSeeder implements CommandLineRunner {
     private final TransactionRepository transactionRepository;
     private final CheckoutSessionRepository checkoutSessionRepository;
     private final ReceivableRepository receivableRepository;
+    private final RecoveryOrchestratorService orchestrator;
     private final Random random = new Random(42);
 
     private static final String[] PLANS = {"Starter", "Growth", "Pro", "Enterprise"};
@@ -58,15 +60,18 @@ public class DataSeeder implements CommandLineRunner {
                        SubscriptionRepository subscriptionRepository,
                        TransactionRepository transactionRepository,
                        CheckoutSessionRepository checkoutSessionRepository,
-                       ReceivableRepository receivableRepository) {
+                       ReceivableRepository receivableRepository,
+                       RecoveryOrchestratorService orchestrator) {
         this.customerRepository = customerRepository;
         this.subscriptionRepository = subscriptionRepository;
         this.transactionRepository = transactionRepository;
         this.checkoutSessionRepository = checkoutSessionRepository;
         this.receivableRepository = receivableRepository;
+        this.orchestrator = orchestrator;
     }
 
     @Override
+    @Transactional
     public void run(String... args) {
         // 1. Seed 200 payment failure transactions
         seedPaymentFailures(200);
@@ -76,6 +81,16 @@ public class DataSeeder implements CommandLineRunner {
 
         // 3. Seed 40 overdue receivables
         seedReceivables(40);
+
+        // 4. Auto-run a recovery batch so dashboard shows real data on first load
+        try {
+            var results = orchestrator.runBatch();
+            org.slf4j.LoggerFactory.getLogger(DataSeeder.class)
+                .info("DataSeeder: Auto batch complete — {} recovery attempts processed", results.size());
+        } catch (Exception e) {
+            org.slf4j.LoggerFactory.getLogger(DataSeeder.class)
+                .error("DataSeeder: Auto batch failed — {}", e.getMessage(), e);
+        }
     }
 
     private void seedPaymentFailures(int count) {

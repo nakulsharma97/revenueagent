@@ -42,6 +42,17 @@ One-click hosted demo so judges don't need local setup.
 
 ---
 
+## Health Checks
+
+The backend exposes a Spring Boot Actuator health endpoint at `/actuator/health`.
+
+- **Railway**: Set the health check path to `/actuator/health` in Service Settings → Networking → Health Check Path.
+- **Render**: Set the health check path to `/actuator/health` in Service Settings.
+
+This endpoint returns `{"status":"UP"}` when the app is healthy, which keeps the service alive on free-tier platforms that auto-sleep after idle.
+
+---
+
 ## Verify the Deployed App
 
 1. Open the Vercel URL in a fresh incognito browser.
