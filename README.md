@@ -4,10 +4,9 @@
 
 > Razorpay AI Buildathon · Track 03 — AI Revenue Recovery
 
-[![Demo](docs/demo-thumbnail.png)](docs/demo.gif)
-
-<!-- Record a 90-second screen capture and save as docs/demo.gif + docs/demo-thumbnail.png.
-     See docs/DEMO_SCRIPT.md for the exact walkthrough outline. -->
+<!-- TODO: Record a 90-second screen capture, save as docs/demo.gif + docs/demo-thumbnail.png,
+     then uncomment the line below. See docs/DEMO_SCRIPT.md for the walkthrough outline. -->
+<!-- [![Demo](docs/demo-thumbnail.png)](docs/demo.gif) -->
 
 ## What this does
 

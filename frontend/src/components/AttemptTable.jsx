@@ -1,4 +1,4 @@
-import { useState, Fragment, useMemo } from 'react';
+import { useState, Fragment, useMemo, memo } from 'react';
 
 const ACTION_COLORS = {
   RETRY_NOW: 'var(--gold)', RETRY_SCHEDULED: 'var(--gold-soft)', SEND_PAYMENT_LINK: 'var(--amber)',
@@ -17,7 +17,7 @@ const ACTION_OPTIONS = ['All', 'RETRY_NOW', 'RETRY_SCHEDULED', 'SEND_PAYMENT_LIN
 const OUTCOME_OPTIONS = ['All', 'SUCCESS', 'FAILED', 'PENDING'];
 const SOURCE_OPTIONS = ['All', 'PAYMENT', 'CHECKOUT', 'RECEIVABLE'];
 
-export default function AttemptTable({ attempts, onSelectAttempt }) {
+function AttemptTableInner({ attempts, onSelectAttempt }) {
   const [openId, setOpenId] = useState(null);
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState('All');
@@ -151,3 +151,5 @@ export default function AttemptTable({ attempts, onSelectAttempt }) {
     </div>
   );
 }
+
+export default memo(AttemptTableInner, (prev, next) => prev.attempts === next.attempts && prev.onSelectAttempt === next.onSelectAttempt);

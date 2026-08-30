@@ -49,6 +49,16 @@ public class MetricsService {
         this.attemptRepository = attemptRepository;
     }
 
+    /** Combined dashboard payload — single round-trip for initial page load. */
+    public DashboardSummary dashboardSummary() {
+        return new DashboardSummary(
+                currentMetrics(),
+                funnelData(),
+                actionBreakdown(),
+                actionEfficiency()
+        );
+    }
+
     public BatchMetrics currentMetrics() {
         List<Transaction> allTx = transactionRepository.findAll();
         List<CheckoutSession> allSessions = checkoutSessionRepository.findAll();

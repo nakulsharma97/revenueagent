@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 
 const STAGE_CONFIG = {
   RECOVERED: { color: '#6FAE7B', label: 'Recovered' },
@@ -7,7 +7,7 @@ const STAGE_CONFIG = {
   LOST: { color: '#756C62', label: 'Lost' },
 };
 
-export default function FunnelChart({ data: funnel }) {
+function FunnelChartInner({ data: funnel }) {
   const [hovered, setHovered] = useState(null);
 
   if (!funnel) return (
@@ -126,3 +126,5 @@ export default function FunnelChart({ data: funnel }) {
     </div>
   );
 }
+
+export default memo(FunnelChartInner, (prev, next) => prev.data === next.data);

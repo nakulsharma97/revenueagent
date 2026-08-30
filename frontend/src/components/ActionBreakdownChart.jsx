@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts';
 
 const ACTION_CONFIG = {
@@ -25,7 +26,7 @@ function CustomTooltip({ active, payload }) {
   );
 }
 
-export default function ActionBreakdownChart({ data = [] }) {
+function ActionBreakdownChartInner({ data = [] }) {
   if (data.length === 0) return (
     <div className="card" style={{ minHeight: 320, width: '100%', minWidth: 0 }}>
       <div style={{ fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 2 }}>SUCCESS RATE BY ACTION</div>
@@ -76,3 +77,5 @@ export default function ActionBreakdownChart({ data = [] }) {
     </div>
   );
 }
+
+export default memo(ActionBreakdownChartInner, (prev, next) => prev.data === next.data);

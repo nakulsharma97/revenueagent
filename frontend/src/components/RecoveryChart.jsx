@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts';
 
 const COLORS = {
@@ -18,7 +19,7 @@ function CustomTooltip({ active, payload }) {
   );
 }
 
-export default function RecoveryChart({ netRecovered, baseline }) {
+function RecoveryChartInner({ netRecovered, baseline }) {
   const data = [
     { name: 'Naive retry-once baseline', value: Math.max(baseline, 1000), key: 'baseline', displayValue: baseline },
     { name: 'Agent (rules + LLM)', value: Math.max(netRecovered, 1000), key: 'agent', displayValue: netRecovered },
@@ -64,3 +65,5 @@ export default function RecoveryChart({ netRecovered, baseline }) {
     </div>
   );
 }
+
+export default memo(RecoveryChartInner, (prev, next) => prev.netRecovered === next.netRecovered && prev.baseline === next.baseline);

@@ -7,7 +7,7 @@ import ActionBreakdownChart from './components/ActionBreakdownChart';
 import AttemptTable from './components/AttemptTable';
 import TransactionModal from './components/TransactionModal';
 import PendingReview from './components/PendingReview';
-import { fetchMetrics, runBatch, exportCsv } from './api';
+import { fetchMetrics, fetchDashboardSummary, runBatch, exportCsv } from './api';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 
@@ -119,6 +119,18 @@ export default function App() {
     catch (e) { if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadMetrics(); }, 2000); else setError('Backend not reachable. Start the Spring Boot app on :8080, then reload.'); }
   }, [retryCount]);
 
+  /** Single round-trip: loads metrics + funnel + actions + efficiency. */
+  const loadDashboard = useCallback(async () => {
+    try {
+      const d = await fetchDashboardSummary();
+      setMetrics(d.metrics); setFunnelData(d.funnel); setActionData(d.actions); setEfficiencyData(d.efficiency);
+      setLastUpdated(new Date()); setError(null); setRetryCount(0);
+    } catch (e) {
+      if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadDashboard(); }, 2000);
+      else setError('Backend not reachable. Start the Spring Boot app on :8080, then reload.');
+    }
+  }, [retryCount]);
+
   const loadReviewCount = useCallback(async () => {
     try { const res = await fetch(`${API_BASE}/api/recovery/pending-review`); if (res.ok) { const data = await res.json(); setReviewCount(data.length); setAlerts(data); } } catch (e) {}
   }, []);
@@ -131,9 +143,6 @@ export default function App() {
     try { const res = await fetch(`${API_BASE}/api/config/bounds`); if (res.ok) setBoundsConfig(await res.json()); } catch (e) {}
   }, []);
 
-  const loadFunnelData = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/metrics/funnel`); if (res.ok) setFunnelData(await res.json()); } catch (e) {} }, []);
-  const loadActionData = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/metrics/actions`); if (res.ok) setActionData(await res.json()); } catch (e) {} }, []);
-  const loadEfficiencyData = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/metrics/efficiency`); if (res.ok) setEfficiencyData(await res.json()); } catch (e) {} }, []);
   const loadReceivables = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/recovery/receivables`); if (res.ok) setAllReceivables(await res.json()); } catch (e) {} }, []);
 
   async function simulateBounds() {
@@ -152,8 +161,8 @@ export default function App() {
     finally { setSimLoading(false); }
   }
 
-  useEffect(() => { loadMetrics(); loadReviewCount(); loadActionLog(); loadBoundsConfig(); loadFunnelData(); loadActionData(); loadEfficiencyData(); loadReceivables(); }, []);
-  useEffect(() => { if (funnelRefresh > 0) { loadReviewCount(); loadActionLog(); loadFunnelData(); loadActionData(); loadEfficiencyData(); } }, [funnelRefresh]);
+  useEffect(() => { loadDashboard(); loadReviewCount(); loadActionLog(); loadBoundsConfig(); loadReceivables(); }, []);
+  useEffect(() => { if (funnelRefresh > 0) { loadDashboard(); loadReviewCount(); loadActionLog(); } }, [funnelRefresh]);
 
   async function handleRunBatch() {
     setLoading(true); setAttempts([]); setStreamCount(null);
@@ -163,7 +172,7 @@ export default function App() {
       setAttempts(reversed); setStreamCount(result.length); setActionLog(result);
       const finalRecovered = reversed.filter(a => a.outcome === 'SUCCESS').reduce((sum, a) => sum + (a.amountRecovered || 0), 0);
       setBatchProgress(prev => prev ? { ...prev, processed: result.length, recoveredAmount: finalRecovered } : null);
-      await loadMetrics(); await loadReviewCount(); await loadActionLog(); setFunnelRefresh(n => n + 1); setError(null);
+      await loadDashboard(); await loadReviewCount(); await loadActionLog(); setFunnelRefresh(n => n + 1); setError(null);
     } catch (e) { setError(e.message?.includes('409') ? 'Batch already running — wait for the current batch to complete.' : 'Batch run failed — check the backend logs.'); }
     finally { setLoading(false); setTimeout(() => setBatchProgress(null), 2000); }
   }

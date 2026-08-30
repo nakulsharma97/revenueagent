@@ -1,5 +1,12 @@
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 
+/** Single round-trip: returns { metrics, funnel, actions, efficiency } together. */
+export async function fetchDashboardSummary() {
+  const res = await fetch(`${API_BASE}/api/metrics/dashboard`);
+  if (!res.ok) throw new Error('dashboard summary fetch failed');
+  return res.json();
+}
+
 export async function fetchMetrics() {
   const res = await fetch(`${API_BASE}/api/metrics`);
   if (!res.ok) throw new Error('metrics fetch failed');

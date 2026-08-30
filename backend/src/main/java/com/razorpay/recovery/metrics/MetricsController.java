@@ -27,6 +27,12 @@ public class MetricsController {
         return metricsService.currentMetrics();
     }
 
+    /** Combined dashboard payload — single round-trip for initial page load. */
+    @GetMapping("/dashboard")
+    public DashboardSummary dashboard() {
+        return metricsService.dashboardSummary();
+    }
+
     @GetMapping("/funnel")
     public FunnelData funnel() {
         return metricsService.funnelData();
