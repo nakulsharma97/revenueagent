@@ -200,6 +200,11 @@ public class RulesEngine {
             eligible.add(RecoveryAction.OFFER_PAYMENT_PLAN);
         }
 
+        // If a promise was made and broken, PROMISE_FOLLOWUP becomes the primary action
+        if (receivable.getPromiseStatus() == com.razorpay.recovery.receivable.Receivable.PromiseStatus.BROKEN) {
+            eligible.add(RecoveryAction.PROMISE_FOLLOWUP);
+        }
+
         eligible.add(RecoveryAction.ESCALATE_TO_HUMAN);
         return eligible;
     }
@@ -215,5 +220,66 @@ public class RulesEngine {
     public boolean requiresHumanSignoff(Receivable receivable, LlmDecision proposed) {
         if (receivable.getReminderCount() >= getMaxRetries() - 1) return true;
         return false;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Trace-aware overloads — append steps as each method runs
+    // ═══════════════════════════════════════════════════════════════
+
+    public List<RecoveryAction> eligibleActions(Transaction tx, DecisionTrace trace) {
+        List<RecoveryAction> eligible = eligibleActions(tx);
+        trace.add("ELIGIBILITY", "RulesEngine.eligibleActions() returned " + eligible + " for TX#" + tx.getId()
+                + " (retryCount=" + tx.getRetryCount() + ", failureReason=" + tx.getFailureReason() + ", amount=" + tx.getAmount() + ")");
+        return eligible;
+    }
+
+    public EnforcedDecision enforceBounds(Transaction tx, LlmDecision proposed, DecisionTrace trace) {
+        EnforcedDecision enforced = enforceBounds(tx, proposed);
+        if (enforced.requiresHumanSignoff()) {
+            trace.add("BOUNDS_CHECK", "RulesEngine flagged human sign-off required: " + enforced.signoffReason());
+        } else if (enforced != EnforcedDecision.ok(proposed) && proposed != null && !Set.copyOf(eligibleActions(tx)).contains(proposed.action())) {
+            trace.add("BOUNDS_CHECK", "Proposed action " + proposed.action() + " was NOT in eligible set — corrected to " + enforced.decision().action());
+        } else {
+            trace.add("BOUNDS_CHECK", "Proposed action " + proposed.action() + " is within eligible set — no correction needed");
+        }
+        return enforced;
+    }
+
+    public List<RecoveryAction> eligibleActions(CheckoutSession session, DecisionTrace trace) {
+        List<RecoveryAction> eligible = eligibleActions(session);
+        trace.add("ELIGIBILITY", "RulesEngine.eligibleActions() returned " + eligible + " for Checkout#" + session.getId()
+                + " (reminderCount=" + session.getReminderCount() + ", reason=" + session.getAbandonmentReason() + ", amount=" + session.getCartAmount() + ")");
+        return eligible;
+    }
+
+    public EnforcedDecision enforceBounds(CheckoutSession session, LlmDecision proposed, DecisionTrace trace) {
+        EnforcedDecision enforced = enforceBounds(session, proposed);
+        if (enforced.requiresHumanSignoff()) {
+            trace.add("BOUNDS_CHECK", "RulesEngine flagged human sign-off required: " + enforced.signoffReason());
+        } else if (proposed != null && !Set.copyOf(eligibleActions(session)).contains(proposed.action())) {
+            trace.add("BOUNDS_CHECK", "Proposed action " + proposed.action() + " was NOT in eligible set — corrected to " + enforced.decision().action());
+        } else {
+            trace.add("BOUNDS_CHECK", "Proposed action " + proposed.action() + " is within eligible set — no correction needed");
+        }
+        return enforced;
+    }
+
+    public List<RecoveryAction> eligibleActions(Receivable receivable, DecisionTrace trace) {
+        List<RecoveryAction> eligible = eligibleActions(receivable);
+        trace.add("ELIGIBILITY", "RulesEngine.eligibleActions() returned " + eligible + " for Receivable#" + receivable.getId()
+                + " (reminderCount=" + receivable.getReminderCount() + ", daysOverdue=" + receivable.getDaysOverdue() + ", amount=" + receivable.getInvoiceAmount() + ")");
+        return eligible;
+    }
+
+    public EnforcedDecision enforceBounds(Receivable receivable, LlmDecision proposed, DecisionTrace trace) {
+        EnforcedDecision enforced = enforceBounds(receivable, proposed);
+        if (enforced.requiresHumanSignoff()) {
+            trace.add("BOUNDS_CHECK", "RulesEngine flagged human sign-off required: " + enforced.signoffReason());
+        } else if (proposed != null && !Set.copyOf(eligibleActions(receivable)).contains(proposed.action())) {
+            trace.add("BOUNDS_CHECK", "Proposed action " + proposed.action() + " was NOT in eligible set — corrected to " + enforced.decision().action());
+        } else {
+            trace.add("BOUNDS_CHECK", "Proposed action " + proposed.action() + " is within eligible set — no correction needed");
+        }
+        return enforced;
     }
 }

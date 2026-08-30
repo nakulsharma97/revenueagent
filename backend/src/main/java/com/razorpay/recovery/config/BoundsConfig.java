@@ -34,11 +34,14 @@ public class BoundsConfig {
     @Value("${recovery.retry-cooldown-minutes}")
     private volatile int retryCooldownMinutes;
 
+    /** Language for customer-facing messages: "en" (English) or "hinglish". */
+    private volatile String language = "en";
+
     /** Snapshot of current config for the GET endpoint. */
-    public record BoundsSnapshot(int maxRetries, int maxDiscountPercent, BigDecimal minAmountForDiscount, int retryCooldownMinutes) {}
+    public record BoundsSnapshot(int maxRetries, int maxDiscountPercent, BigDecimal minAmountForDiscount, int retryCooldownMinutes, String language) {}
 
     public BoundsSnapshot snapshot() {
-        return new BoundsSnapshot(maxRetries, maxDiscountPercent, minAmountForDiscount, retryCooldownMinutes);
+        return new BoundsSnapshot(maxRetries, maxDiscountPercent, minAmountForDiscount, retryCooldownMinutes, language);
     }
 
     /** Apply values from a PUT request. Only non-null fields are updated. */
@@ -54,6 +57,9 @@ public class BoundsConfig {
         }
         if (retryCooldownMinutes != null && retryCooldownMinutes >= 0 && retryCooldownMinutes <= 1440) {
             this.retryCooldownMinutes = retryCooldownMinutes;
+        }
+        if (language != null && (language.equals("en") || language.equals("hinglish"))) {
+            this.language = language;
         }
     }
 }

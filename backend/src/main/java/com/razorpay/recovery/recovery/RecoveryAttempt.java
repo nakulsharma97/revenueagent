@@ -4,13 +4,11 @@ import com.razorpay.recovery.checkout.CheckoutSession;
 import com.razorpay.recovery.receivable.Receivable;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
-import com.razorpay.recovery.checkout.CheckoutSession;
-import com.razorpay.recovery.receivable.Receivable;
-
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
@@ -69,9 +67,31 @@ public class RecoveryAttempt {
     @Column(length = 500)
     private String signoffReason;
 
+    /** Signoff resolution status: PENDING (awaiting human), APPROVED, or REJECTED. */
+    @Enumerated(EnumType.STRING)
+    private SignoffStatus signoffStatus = SignoffStatus.PENDING;
+
+    /** When the signoff was resolved by a human. */
+    private LocalDateTime signoffResolvedAt;
+
     /** Groups all attempts from one batch run for per-batch metrics. */
     @Column(length = 36)
     private String batchId;
+
+    /** Customer-facing message (SMS/email draft) in the configured language. */
+    @Column(length = 1000)
+    private String customerMessage;
+
+    /**
+     * Structured multi-step trace showing exactly how the agent reached its decision.
+     * Built incrementally by RulesEngine and DecisionAgentService — never reconstructed.
+     * Stored as JSON text; deserialized via DecisionTraceConverter.
+     */
+    @Lob
+    @Column(columnDefinition = "TEXT")
+    @Convert(converter = DecisionTraceConverter.class)
+    @JsonSerialize(using = DecisionTraceSerializer.class)
+    private DecisionTrace decisionTrace;
 
     public enum SourceType {
         PAYMENT, CHECKOUT, RECEIVABLE
@@ -80,10 +100,15 @@ public class RecoveryAttempt {
     public enum RecoveryAction {
         RETRY_NOW, RETRY_SCHEDULED, SEND_PAYMENT_LINK, OFFER_DISCOUNT,
         ESCALATE_TO_HUMAN, ABANDON,
-        CHECKOUT_REMINDER, OFFER_PAYMENT_PLAN, SEND_REMINDER
+        CHECKOUT_REMINDER, OFFER_PAYMENT_PLAN, SEND_REMINDER,
+        PROMISE_FOLLOWUP
     }
 
     public enum AttemptOutcome {
         PENDING, SUCCESS, FAILED
+    }
+
+    public enum SignoffStatus {
+        PENDING, APPROVED, REJECTED
     }
 }

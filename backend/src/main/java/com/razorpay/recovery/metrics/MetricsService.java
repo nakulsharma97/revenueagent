@@ -105,6 +105,14 @@ public class MetricsService {
                 "label", "Overdue Receivables"
         ));
 
+        // Promise-keep rate: KEPT / (KEPT + BROKEN)
+        long promisesKept = allReceivables.stream()
+                .filter(r -> r.getPromiseStatus() == com.razorpay.recovery.receivable.Receivable.PromiseStatus.KEPT).count();
+        long promisesBroken = allReceivables.stream()
+                .filter(r -> r.getPromiseStatus() == com.razorpay.recovery.receivable.Receivable.PromiseStatus.BROKEN).count();
+        double promiseKeepRate = (promisesKept + promisesBroken) == 0 ? 0.0
+                : Math.round((promisesKept * 1000.0) / (promisesKept + promisesBroken)) / 10.0;
+
         return new BatchMetrics(
                 totalAtRisk,
                 recoveredCount,
@@ -116,7 +124,8 @@ public class MetricsService {
                 baseline.count,
                 paymentAtRisk, checkoutAtRisk, receivableAtRisk,
                 paymentRecovered, checkoutRecovered, receivableRecovered,
-                bySource
+                bySource,
+                promiseKeepRate
         );
     }
 
@@ -268,5 +277,179 @@ public class MetricsService {
             ));
         }
         return result;
+    }
+
+    /**
+     * Per-action ROI: recovered per rupee spent on interventions.
+     * Zero-cost actions (e.g. RETRY_NOW) show null ratio with a costNote.
+     * Sorted by recoveredPerRupeeSpent descending (nulls last).
+     */
+    public List<ActionEfficiency> actionEfficiency() {
+        List<RecoveryAttempt> attempts = attemptRepository.findAll();
+        List<ActionEfficiency> result = new ArrayList<>();
+
+        for (RecoveryAction action : RecoveryAction.values()) {
+            List<RecoveryAttempt> actionAttempts = attempts.stream()
+                    .filter(a -> a.getActionTaken() == action)
+                    .toList();
+            if (actionAttempts.isEmpty()) continue;
+
+            long total = actionAttempts.size();
+            long successCount = actionAttempts.stream()
+                    .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
+
+            BigDecimal totalRecovered = actionAttempts.stream()
+                    .map(RecoveryAttempt::getAmountRecovered)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .setScale(2, RoundingMode.HALF_UP);
+
+            BigDecimal totalCost = actionAttempts.stream()
+                    .map(RecoveryAttempt::getInterventionCost)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .setScale(2, RoundingMode.HALF_UP);
+
+            BigDecimal ratio = null;
+            String costNote = null;
+            if (totalCost.compareTo(BigDecimal.ZERO) > 0) {
+                ratio = totalRecovered.divide(totalCost, 2, RoundingMode.HALF_UP);
+            } else {
+                costNote = "No direct cost";
+            }
+
+            result.add(new ActionEfficiency(
+                    action.name(), total, successCount,
+                    totalRecovered, totalCost, ratio, costNote
+            ));
+        }
+
+        // Sort: actions with ratio first (descending), then zero-cost actions
+        result.sort((a, b) -> {
+            if (a.recoveredPerRupeeSpent() == null && b.recoveredPerRupeeSpent() == null) return 0;
+            if (a.recoveredPerRupeeSpent() == null) return 1;
+            if (b.recoveredPerRupeeSpent() == null) return -1;
+            return b.recoveredPerRupeeSpent().compareTo(a.recoveredPerRupeeSpent());
+        });
+
+        return result;
+    }
+
+    /**
+     * What-if simulator: re-evaluates existing RecoveryAttempt records against
+     * hypothetical bounds. Does NOT call the LLM or mock gateway — pure recalculation.
+     *
+     * Logic per attempt:
+     * - RETRY_NOW/RETRY_SCHEDULED: eligible only if retryCount < maxRetries
+     * - OFFER_DISCOUNT: eligible only if amount >= minAmountForDiscount AND discountPercent <= maxDiscountPercent
+     * - SEND_PAYMENT_LINK, SEND_REMINDER, CHECKOUT_REMINDER, PROMISE_FOLLOWUP, OFFER_PAYMENT_PLAN:
+     *   always eligible (no bounds constraint)
+     * - ESCALATE_TO_HUMAN, ABANDON: always eligible
+     * - If attempt was PENDING (cooldown skip): always included as-is
+     * - If action would NOT be eligible under new bounds: excluded entirely
+     *   (the agent would have chosen something else, so we don't count this recovery)
+     */
+    public SimulationResult simulate(int maxRetries, int maxDiscountPercent,
+                                      BigDecimal minAmountForDiscount, int retryCooldownMinutes) {
+        List<RecoveryAttempt> attempts = attemptRepository.findAll();
+        BatchMetrics actual = currentMetrics();
+
+        long simRecovered = 0;
+        BigDecimal simRevenue = BigDecimal.ZERO;
+        BigDecimal simCost = BigDecimal.ZERO;
+        long simAttempts = 0;
+
+        for (RecoveryAttempt a : attempts) {
+            // Cooldown skips are always the same regardless of bounds
+            if (a.getOutcome() == AttemptOutcome.PENDING) {
+                simAttempts++;
+                continue;
+            }
+
+            boolean eligible = isEligibleUnderBounds(a, maxRetries, maxDiscountPercent, minAmountForDiscount);
+            if (!eligible) {
+                // This attempt would not have happened — agent would pick differently
+                continue;
+            }
+
+            simAttempts++;
+            if (a.getOutcome() == AttemptOutcome.SUCCESS) {
+                simRecovered++;
+                simRevenue = simRevenue.add(a.getAmountRecovered());
+            }
+            simCost = simCost.add(a.getInterventionCost());
+        }
+
+        long totalAtRisk = actual.totalAtRisk();
+        double simRecoveryRate = totalAtRisk == 0 ? 0 : Math.round((simRecovered * 1000.0) / totalAtRisk) / 10.0;
+        BigDecimal simNet = simRevenue.subtract(simCost);
+
+        // Build simulated BatchMetrics (reuse actual for fields that don't change)
+        BatchMetrics simulated = new BatchMetrics(
+                actual.totalAtRisk(),
+                simRecovered,
+                simRevenue.setScale(2, RoundingMode.HALF_UP),
+                simCost.setScale(2, RoundingMode.HALF_UP),
+                simNet.setScale(2, RoundingMode.HALF_UP),
+                Math.round(simRecoveryRate * 100.0) / 100.0,
+                actual.baselineNetRecovered(),
+                actual.baselineRecoveryCount(),
+                actual.paymentAtRisk(), actual.checkoutAtRisk(), actual.receivableAtRisk(),
+                actual.paymentRecovered(), actual.checkoutRecovered(), actual.receivableRecovered(),
+                actual.bySource(),
+                actual.promiseKeepRate()
+        );
+
+        return new SimulationResult(
+                simulated,
+                simRevenue.subtract(actual.revenueRecovered()),
+                simCost.subtract(actual.interventionCost()),
+                simNet.subtract(actual.netRecovered()),
+                simRecovered - actual.recoveredCount(),
+                simAttempts - attempts.size(),
+                new SimulationResult.SimulationAssumptions(
+                        maxRetries, maxDiscountPercent, minAmountForDiscount, retryCooldownMinutes
+                )
+        );
+    }
+
+    /** Checks if a recovery action would be eligible under the given bounds. */
+    private boolean isEligibleUnderBounds(RecoveryAttempt a, int maxRetries, int maxDiscountPercent,
+                                           BigDecimal minAmountForDiscount) {
+        RecoveryAction action = a.getActionTaken();
+        if (action == null) return false;
+
+        return switch (action) {
+            case RETRY_NOW, RETRY_SCHEDULED -> {
+                // Get the source entity's retry count from the attempt's reasoning/context
+                // We use the transaction's retryCount stored in the attempt
+                int retryCount = extractRetryCount(a);
+                yield retryCount < maxRetries;
+            }
+            case OFFER_DISCOUNT -> {
+                // Check: amount >= minAmountForDiscount AND discountPercent <= maxDiscountPercent
+                BigDecimal amount = extractAmount(a);
+                boolean amountOk = amount != null && amount.compareTo(minAmountForDiscount) >= 0;
+                boolean discountOk = maxDiscountPercent > 0;
+                yield amountOk && discountOk;
+            }
+            // These actions have no bounds constraints
+            case SEND_PAYMENT_LINK, ESCALATE_TO_HUMAN, ABANDON,
+                 CHECKOUT_REMINDER, OFFER_PAYMENT_PLAN, SEND_REMINDER,
+                 PROMISE_FOLLOWUP -> true;
+            default -> false;
+        };
+    }
+
+    private int extractRetryCount(RecoveryAttempt a) {
+        if (a.getTransaction() != null) return a.getTransaction().getRetryCount();
+        if (a.getCheckoutSession() != null) return a.getCheckoutSession().getReminderCount();
+        if (a.getReceivable() != null) return a.getReceivable().getReminderCount();
+        return 0;
+    }
+
+    private BigDecimal extractAmount(RecoveryAttempt a) {
+        if (a.getTransaction() != null) return a.getTransaction().getAmount();
+        if (a.getCheckoutSession() != null) return a.getCheckoutSession().getCartAmount();
+        if (a.getReceivable() != null) return a.getReceivable().getInvoiceAmount();
+        return BigDecimal.ZERO;
     }
 }

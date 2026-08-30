@@ -4,6 +4,7 @@ const ACTION_COLORS = {
   RETRY_NOW: 'var(--gold)', RETRY_SCHEDULED: 'var(--gold-soft)', SEND_PAYMENT_LINK: 'var(--amber)',
   OFFER_DISCOUNT: 'var(--gold-bright)', ESCALATE_TO_HUMAN: 'var(--red)', ABANDON: 'var(--text-muted)',
   CHECKOUT_REMINDER: 'var(--amber)', OFFER_PAYMENT_PLAN: 'var(--green)', SEND_REMINDER: 'var(--gold)',
+  PROMISE_FOLLOWUP: 'var(--amber)',
 };
 
 const OUTCOME_STYLES = {
@@ -12,7 +13,7 @@ const OUTCOME_STYLES = {
   PENDING: { color: 'var(--amber)', bg: 'var(--amber-bg)', label: 'PENDING' },
 };
 
-const ACTION_OPTIONS = ['All', 'RETRY_NOW', 'RETRY_SCHEDULED', 'SEND_PAYMENT_LINK', 'OFFER_DISCOUNT', 'ESCALATE_TO_HUMAN', 'ABANDON', 'CHECKOUT_REMINDER', 'OFFER_PAYMENT_PLAN', 'SEND_REMINDER'];
+const ACTION_OPTIONS = ['All', 'RETRY_NOW', 'RETRY_SCHEDULED', 'SEND_PAYMENT_LINK', 'OFFER_DISCOUNT', 'ESCALATE_TO_HUMAN', 'ABANDON', 'CHECKOUT_REMINDER', 'OFFER_PAYMENT_PLAN', 'SEND_REMINDER', 'PROMISE_FOLLOWUP'];
 const OUTCOME_OPTIONS = ['All', 'SUCCESS', 'FAILED', 'PENDING'];
 const SOURCE_OPTIONS = ['All', 'PAYMENT', 'CHECKOUT', 'RECEIVABLE'];
 
@@ -113,6 +114,29 @@ export default function AttemptTable({ attempts, onSelectAttempt }) {
                         <div>{a.reasoning}</div>
                         {a.requiresHumanSignoff && a.signoffReason && (
                           <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', color: 'var(--red)', fontSize: 12, fontWeight: 500 }}>⚠ Signoff Required: {a.signoffReason}</div>
+                        )}
+                        {a.decisionTrace && a.decisionTrace.length > 0 && (
+                          <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600, marginBottom: 8 }}>Full Decision Trace</div>
+                            <div style={{ position: 'relative', paddingLeft: 20 }}>
+                              {a.decisionTrace.map((step, i) => (
+                                <div key={i} style={{ position: 'relative', paddingBottom: i < a.decisionTrace.length - 1 ? 12 : 0 }}>
+                                  <div style={{ position: 'absolute', left: -16, top: 4, width: 8, height: 8, borderRadius: '50%', background: step.step === 'EXECUTION' ? (step.detail.includes('SUCCESS') ? 'var(--green)' : 'var(--red)') : step.step === 'SIGNOFF' ? 'var(--red)' : 'var(--gold)', border: '1px solid var(--surface)' }} />
+                                  {i < a.decisionTrace.length - 1 && <div style={{ position: 'absolute', left: -13, top: 14, width: 1, height: 'calc(100% - 10px)', background: 'var(--border)' }} />}
+                                  <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--gold)', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 2 }}>{step.step}</div>
+                                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{step.detail}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {a.customerMessage && (
+                          <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600, marginBottom: 4 }}>Customer-Facing Message</div>
+                            <div style={{ padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', fontStyle: 'italic', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                              {a.customerMessage}
+                            </div>
+                          </div>
                         )}
                       </div>
                     </td></tr>

@@ -51,6 +51,35 @@ export default function TransactionModal({ attempt, onClose }) {
             </div>
           </div>
 
+          {/* Decision Trace Timeline */}
+          {attempt.decisionTrace && attempt.decisionTrace.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 8, letterSpacing: '0.06em' }}>Decision Trace</div>
+              <div style={{ padding: '14px 16px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                <div style={{ position: 'relative', paddingLeft: 20 }}>
+                  {attempt.decisionTrace.map((step, i) => (
+                    <div key={i} style={{ position: 'relative', paddingBottom: i < attempt.decisionTrace.length - 1 ? 14 : 0 }}>
+                      <div style={{ position: 'absolute', left: -16, top: 4, width: 8, height: 8, borderRadius: '50%', background: step.step === 'EXECUTION' ? (step.detail.includes('SUCCESS') ? 'var(--green)' : 'var(--red)') : step.step === 'SIGNOFF' ? 'var(--red)' : 'var(--gold)', border: '1.5px solid var(--surface)' }} />
+                      {i < attempt.decisionTrace.length - 1 && <div style={{ position: 'absolute', left: -13, top: 14, width: 1, height: 'calc(100% - 10px)', background: 'var(--border)' }} />}
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--gold)', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: 3 }}>{step.step}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, fontFamily: 'var(--font-body)' }}>{step.detail}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Customer-facing message */}
+          {attempt.customerMessage && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6, letterSpacing: '0.06em' }}>Customer-Facing Message</div>
+              <div style={{ padding: '12px 14px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6, border: '1px solid var(--border-subtle)', fontStyle: 'italic' }}>
+                {attempt.customerMessage}
+              </div>
+            </div>
+          )}
+
           {/* Financials */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
             {[

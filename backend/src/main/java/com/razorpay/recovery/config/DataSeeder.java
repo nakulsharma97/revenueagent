@@ -143,6 +143,23 @@ public class DataSeeder implements CommandLineRunner {
             receivable.setDaysOverdue(10 + random.nextInt(60));
             receivable.setStatus(ReceivableStatus.OVERDUE);
             receivable.setReminderCount(0);
+
+            // ~30% of receivables get a promise-to-pay with various statuses
+            if (random.nextDouble() < 0.30) {
+                int daysOffset = random.nextInt(5) - 2; // -2 to +2 days from now
+                receivable.setPromisedPaymentDate(LocalDate.now().plusDays(daysOffset));
+                if (daysOffset < 0) {
+                    // Promise date in the past -> BROKEN
+                    receivable.setPromiseStatus(com.razorpay.recovery.receivable.Receivable.PromiseStatus.BROKEN);
+                } else if (daysOffset == 0) {
+                    // Due today -> PROMISED
+                    receivable.setPromiseStatus(com.razorpay.recovery.receivable.Receivable.PromiseStatus.PROMISED);
+                } else {
+                    // Future date -> PROMISED
+                    receivable.setPromiseStatus(com.razorpay.recovery.receivable.Receivable.PromiseStatus.PROMISED);
+                }
+            }
+
             receivableRepository.save(receivable);
         }
     }

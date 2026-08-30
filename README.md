@@ -1,5 +1,12 @@
 # Revenue Recovery Agent
 
+[![Demo](docs/demo-thumbnail.png)](docs/demo.gif)
+<!-- TODO: Replace the placeholder above with your real recording once you have it.
+     Record a 90-second screen capture (Loom, OBS, or your OS screen recorder).
+     Save the thumbnail as docs/demo-thumbnail.png (1280×720 recommended)
+     and the video as docs/demo.gif (or docs/demo.mp4 + convert).
+     See docs/DEMO_SCRIPT.md for the exact walkthrough outline. -->
+
 **Razorpay AI Buildathon · Track 03 — AI Revenue Recovery**
 
 An AI agent that detects revenue at risk across **payment failures, checkout abandonment, and overdue receivables**, determines the right intervention inside hard human-set bounds, executes it, and reports honest recovered-vs-cost metrics.
@@ -97,6 +104,7 @@ Runs on `http://localhost:5173`. Set `VITE_API_BASE` to point at a different bac
 | GET | `/api/recovery/export` | CSV export of all attempts |
 | GET | `/api/config/bounds` | Current recovery bounds |
 | PUT | `/api/config/bounds` | Update bounds at runtime |
+| POST | `/api/webhooks/razorpay/payment-failed` | Accept Razorpay payment.failed webhook (shape-compatible) |
 
 ## Project structure (backend)
 
@@ -135,6 +143,26 @@ com.razorpay.recovery/
 4. **Show Agent vs. Baseline** — the headline chart proving measured value
 5. **Check Alerts** — show items requiring human sign-off (bounded workflow proof)
 6. **Change a bound live** — lower the discount ceiling in Settings, re-run, show more sign-offs
+
+## Integration readiness
+
+Payment-failure ingestion accepts Razorpay's actual `payment.failed` webhook shape at `POST /api/webhooks/razorpay/payment-failed` — the seeded DataSeeder batch is for demo purposes; this endpoint is what a real deployment would receive from Razorpay directly.
+
+**Shape-compatible** with Razorpay's webhook (same field names, nested structure, error codes), not a live integration. The endpoint maps Razorpay's `error_code` / `error_reason` / `error_source` fields to the internal `FailureReason` enum using the documented mapping below. In production, you would point Razorpay's webhook URL at this endpoint and remove the DataSeeder.
+
+```
+Razorpay error_reason          →  FailureReason
+─────────────────────────────────────────────────
+insufficient_funds             →  INSUFFICIENT_FUNDS
+expired_card / card_expired    →  CARD_EXPIRED
+invalid_cvv                    →  INVALID_CVV
+suspected_fraud / fraud        →  CARD_STOLEN_FLAG
+network_error / timeout        →  NETWORK_ERROR
+do_not_honor / bank_declined   →  BANK_SERVER_DOWN
+(unrecognised / null)          →  NETWORK_ERROR (retryable default)
+```
+
+The endpoint is idempotent — re-sending the same `pay_XXX` ID returns the existing transaction, not a duplicate.
 
 ## Tech stack
 

@@ -24,7 +24,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -119,14 +118,18 @@ public class RecoveryOrchestratorService {
     // ═══════════════════════════════════════════════════════════════
 
     private RecoveryAttempt processPayment(Transaction tx, String batchId) {
+        DecisionTrace trace = new DecisionTrace();
+        trace.add("DETECTION", "Transaction TX#" + tx.getId() + " flagged as AT_RISK (amount=" + tx.getAmount() + ", failureReason=" + tx.getFailureReason() + ")");
+
         if (tx.getLastAttemptAt() != null) {
             long minSince = Duration.between(tx.getLastAttemptAt(), LocalDateTime.now()).toMinutes();
             if (minSince < getCooldownMinutes()) {
-                return persistSkip(tx, null, null, batchId, minSince);
+                trace.add("COOLDOWN_SKIP", "Last attempt " + minSince + "min ago, cooldown is " + getCooldownMinutes() + "min — skipping.");
+                return persistSkip(tx, null, null, batchId, minSince, trace);
             }
         }
 
-        DecisionResult result = decisionAgentService.decideWithMeta(tx);
+        DecisionResult result = decisionAgentService.decideWithMeta(tx, trace);
         LlmDecision decision = result.decision();
 
         RecoveryAttempt attempt = new RecoveryAttempt();
@@ -140,8 +143,11 @@ public class RecoveryOrchestratorService {
         attempt.setExecutedAt(LocalDateTime.now());
         attempt.setRequiresHumanSignoff(result.requiresHumanSignoff());
         attempt.setSignoffReason(result.signoffReason());
+        attempt.setDecisionTrace(trace);
+        attempt.setCustomerMessage(decision.customerMessage());
 
         boolean success = executePayment(tx, decision, attempt);
+        trace.add("EXECUTION", "MockPaymentGatewayService.attemptCharge(TX#" + tx.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
         applyPaymentOutcome(tx, attempt, success);
 
         transactionRepository.save(tx);
@@ -187,14 +193,18 @@ public class RecoveryOrchestratorService {
     // ═══════════════════════════════════════════════════════════════
 
     private RecoveryAttempt processCheckout(CheckoutSession session, String batchId) {
+        DecisionTrace trace = new DecisionTrace();
+        trace.add("DETECTION", "CheckoutSession#" + session.getId() + " flagged as ABANDONED (amount=" + session.getCartAmount() + ", reason=" + session.getAbandonmentReason() + ")");
+
         if (session.getAbandonedAt() != null) {
             long minSince = Duration.between(session.getAbandonedAt(), LocalDateTime.now()).toMinutes();
             if (minSince < getCooldownMinutes()) {
-                return persistSkip(null, session, null, batchId, minSince);
+                trace.add("COOLDOWN_SKIP", "Abandoned " + minSince + "min ago, cooldown is " + getCooldownMinutes() + "min — skipping.");
+                return persistSkip(null, session, null, batchId, minSince, trace);
             }
         }
 
-        DecisionResult result = decisionAgentService.decideWithMetaCheckout(session);
+        DecisionResult result = decisionAgentService.decideWithMetaCheckout(session, trace);
         LlmDecision decision = result.decision();
 
         RecoveryAttempt attempt = new RecoveryAttempt();
@@ -208,8 +218,11 @@ public class RecoveryOrchestratorService {
         attempt.setExecutedAt(LocalDateTime.now());
         attempt.setRequiresHumanSignoff(result.requiresHumanSignoff());
         attempt.setSignoffReason(result.signoffReason());
+        attempt.setDecisionTrace(trace);
+        attempt.setCustomerMessage(decision.customerMessage());
 
         boolean success = executeCheckout(session, decision, attempt);
+        trace.add("EXECUTION", "MockNotificationService.execute(Checkout#" + session.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
         applyCheckoutOutcome(session, attempt, success);
 
         checkoutSessionRepository.save(session);
@@ -255,7 +268,18 @@ public class RecoveryOrchestratorService {
     // ═══════════════════════════════════════════════════════════════
 
     private RecoveryAttempt processReceivable(Receivable receivable, String batchId) {
-        DecisionResult result = decisionAgentService.decideWithMetaReceivable(receivable);
+        DecisionTrace trace = new DecisionTrace();
+        trace.add("DETECTION", "Receivable#" + receivable.getId() + " flagged as OVERDUE (amount=" + receivable.getInvoiceAmount() + ", daysOverdue=" + receivable.getDaysOverdue() + ")");
+
+        // Promise-to-pay tracking: if promise was made and payment date has passed, mark as BROKEN
+        if (receivable.getPromiseStatus() == com.razorpay.recovery.receivable.Receivable.PromiseStatus.PROMISED
+                && receivable.getPromisedPaymentDate() != null
+                && receivable.getPromisedPaymentDate().isBefore(java.time.LocalDate.now())) {
+            receivable.setPromiseStatus(com.razorpay.recovery.receivable.Receivable.PromiseStatus.BROKEN);
+            trace.add("PROMISE_CHECK", "Promise date " + receivable.getPromisedPaymentDate() + " has passed without payment — status set to BROKEN.");
+        }
+
+        DecisionResult result = decisionAgentService.decideWithMetaReceivable(receivable, trace);
         LlmDecision decision = result.decision();
 
         RecoveryAttempt attempt = new RecoveryAttempt();
@@ -269,8 +293,11 @@ public class RecoveryOrchestratorService {
         attempt.setExecutedAt(LocalDateTime.now());
         attempt.setRequiresHumanSignoff(result.requiresHumanSignoff());
         attempt.setSignoffReason(result.signoffReason());
+        attempt.setDecisionTrace(trace);
+        attempt.setCustomerMessage(decision.customerMessage());
 
         boolean success = executeReceivable(receivable, decision, attempt);
+        trace.add("EXECUTION", "MockNotificationService.execute(Receivable#" + receivable.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
         applyReceivableOutcome(receivable, attempt, success);
 
         receivableRepository.save(receivable);
@@ -286,6 +313,11 @@ public class RecoveryOrchestratorService {
                 attempt.setInterventionCost(notificationService.costOf(false));
                 yield paid;
             }
+            case PROMISE_FOLLOWUP -> {
+                // Follow up on a broken promise — send a firm reminder referencing the missed date
+                boolean paid = notificationService.sendReceivableReminder(receivable);
+                yield paid;
+            }
             case ESCALATE_TO_HUMAN, ABANDON -> false;
             default -> false;
         };
@@ -296,6 +328,11 @@ public class RecoveryOrchestratorService {
         if (success) {
             attempt.setAmountRecovered(receivable.getInvoiceAmount());
             receivable.setStatus(ReceivableStatus.RECOVERED);
+            // If a promise was outstanding and payment came through, mark it KEPT
+            if (receivable.getPromiseStatus() == com.razorpay.recovery.receivable.Receivable.PromiseStatus.PROMISED
+                    || receivable.getPromiseStatus() == com.razorpay.recovery.receivable.Receivable.PromiseStatus.BROKEN) {
+                receivable.setPromiseStatus(com.razorpay.recovery.receivable.Receivable.PromiseStatus.KEPT);
+            }
         } else {
             receivable.setReminderCount(receivable.getReminderCount() + 1);
             if (receivable.getReminderCount() >= getMaxRetries()) {
@@ -310,7 +347,7 @@ public class RecoveryOrchestratorService {
 
     /** Persist a cooldown-skip attempt so the ledger shows why an item was skipped. */
     private RecoveryAttempt persistSkip(Transaction tx, CheckoutSession session, Receivable receivable,
-                                        String batchId, long minutesSinceLast) {
+                                        String batchId, long minutesSinceLast, DecisionTrace trace) {
         RecoveryAttempt skip = new RecoveryAttempt();
         if (tx != null) { skip.setSourceType(SourceType.PAYMENT); skip.setTransaction(tx); }
         else if (session != null) { skip.setSourceType(SourceType.CHECKOUT); skip.setCheckoutSession(session); }
@@ -321,6 +358,7 @@ public class RecoveryOrchestratorService {
         skip.setOutcome(AttemptOutcome.PENDING);
         skip.setExecutedAt(LocalDateTime.now());
         skip.setBatchId(batchId);
+        skip.setDecisionTrace(trace);
         return attemptRepository.save(skip);
     }
 }

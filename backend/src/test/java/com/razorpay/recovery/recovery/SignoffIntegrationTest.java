@@ -26,7 +26,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
@@ -87,7 +87,7 @@ class SignoffIntegrationTest {
                 false,
                 true,
                 "3rd consecutive failure — requires human review before final disposition.");
-        when(decisionAgentService.decideWithMeta(tx)).thenReturn(mockResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(mockResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(false);
 
         List<RecoveryAttempt> results = orchestrator.runBatch();
@@ -110,7 +110,7 @@ class SignoffIntegrationTest {
         DecisionResult mockResult = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "First failure, retry", 0.6, null)),
                 false);
-        when(decisionAgentService.decideWithMeta(tx)).thenReturn(mockResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(mockResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(true);
 
         List<RecoveryAttempt> results = orchestrator.runBatch();
@@ -131,7 +131,7 @@ class SignoffIntegrationTest {
         DecisionResult mockResult = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_SCHEDULED, "Schedule retry", 0.55, null)),
                 false);
-        when(decisionAgentService.decideWithMeta(tx)).thenReturn(mockResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(mockResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(false);
 
         List<RecoveryAttempt> results = orchestrator.runBatch();
@@ -155,7 +155,7 @@ class SignoffIntegrationTest {
                 "LLM proposed 20% discount, capped to policy max 15%"
         );
         DecisionResult mockResult = new DecisionResult(capped, true);
-        when(decisionAgentService.decideWithMeta(tx)).thenReturn(mockResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(mockResult);
         when(notificationService.sendDiscountOffer(tx, 15)).thenReturn(true);
         when(notificationService.costOf(true)).thenReturn(new BigDecimal("0.35"));
 
@@ -182,8 +182,8 @@ class SignoffIntegrationTest {
         DecisionResult result2 = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.SEND_PAYMENT_LINK, "Send link", 0.5, null)), false);
 
-        when(decisionAgentService.decideWithMeta(tx1)).thenReturn(result1);
-        when(decisionAgentService.decideWithMeta(tx2)).thenReturn(result2);
+        when(decisionAgentService.decideWithMeta(eq(tx1), any(DecisionTrace.class))).thenReturn(result1);
+        when(decisionAgentService.decideWithMeta(eq(tx2), any(DecisionTrace.class))).thenReturn(result2);
         when(paymentGateway.attemptCharge(tx1)).thenReturn(true);
         when(notificationService.sendPaymentLink(tx2)).thenReturn(true);
         when(notificationService.costOf(true)).thenReturn(new BigDecimal("0.05"));
@@ -225,7 +225,7 @@ class SignoffIntegrationTest {
         DecisionResult llmResult = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "LLM decision", 0.85, null)),
                 true);
-        when(decisionAgentService.decideWithMeta(tx)).thenReturn(llmResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(llmResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(true);
 
         List<RecoveryAttempt> results = orchestrator.runBatch();
@@ -246,7 +246,7 @@ class SignoffIntegrationTest {
         DecisionResult heuristicResult = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "Rules-only mode: first failure", 0.6, null)),
                 false);
-        when(decisionAgentService.decideWithMeta(tx)).thenReturn(heuristicResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(heuristicResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(true);
 
         List<RecoveryAttempt> results = orchestrator.runBatch();

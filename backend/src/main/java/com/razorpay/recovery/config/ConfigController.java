@@ -12,7 +12,6 @@ import java.math.BigDecimal;
  */
 @RestController
 @RequestMapping("/api/config")
-@CrossOrigin(origins = "*")
 public class ConfigController {
 
     private final BoundsConfig boundsConfig;
@@ -34,6 +33,9 @@ public class ConfigController {
                 request.minAmountForDiscount(),
                 request.retryCooldownMinutes()
         );
+        if (request.language() != null) {
+            boundsConfig.setLanguage(request.language());
+        }
         return boundsConfig.snapshot();
     }
 
@@ -45,6 +47,7 @@ public class ConfigController {
             Integer maxRetries,
             Integer maxDiscountPercent,
             BigDecimal minAmountForDiscount,
-            Integer retryCooldownMinutes
+            Integer retryCooldownMinutes,
+            String language
     ) {}
 }

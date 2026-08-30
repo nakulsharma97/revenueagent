@@ -36,6 +36,10 @@ public class Transaction {
 
     private int retryCount = 0;
 
+    /** Razorpay payment ID (e.g. "pay_XXX") — set when ingested from a webhook. Null for seeded data. */
+    @Column(length = 64)
+    private String razorpayPaymentId;
+
     private LocalDateTime createdAt;
     private LocalDateTime lastAttemptAt;
 

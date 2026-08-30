@@ -1,7 +1,6 @@
 package com.razorpay.recovery.metrics;
 
 import java.math.BigDecimal;
-import java.util.List;
 import java.util.Map;
 
 public record BatchMetrics(
@@ -19,6 +18,7 @@ public record BatchMetrics(
         long paymentRecovered,
         long checkoutRecovered,
         long receivableRecovered,
-        Map<String, Object> bySource
+        Map<String, Object> bySource,
+        double promiseKeepRate
 ) {
 }

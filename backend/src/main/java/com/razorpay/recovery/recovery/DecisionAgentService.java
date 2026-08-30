@@ -11,6 +11,8 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
+import com.razorpay.recovery.config.BoundsConfig;
+
 import java.util.List;
 import java.util.Map;
 
@@ -41,8 +43,15 @@ public class DecisionAgentService {
     @Value("${llm.model}")
     private String model;
 
-    public DecisionAgentService(RulesEngine rulesEngine) {
+    private final BoundsConfig boundsConfig;
+
+    public DecisionAgentService(RulesEngine rulesEngine, BoundsConfig boundsConfig) {
         this.rulesEngine = rulesEngine;
+        this.boundsConfig = boundsConfig;
+    }
+
+    private boolean isHinglish() {
+        return "hinglish".equals(boundsConfig.getLanguage());
     }
 
     /**
@@ -145,12 +154,16 @@ public class DecisionAgentService {
             String json = text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
             JsonNode decision = mapper.readTree(json);
 
+            String customerMsg = decision.has("customerMessage") && !decision.get("customerMessage").isNull()
+                    ? decision.get("customerMessage").asText() : null;
+
             return new LlmDecision(
                     RecoveryAction.valueOf(decision.get("action").asText()),
                     decision.get("reasoning").asText(),
                     decision.path("confidence").asDouble(0.7),
                     decision.has("discountPercent") && !decision.get("discountPercent").isNull()
-                            ? decision.get("discountPercent").asInt() : null
+                            ? decision.get("discountPercent").asInt() : null,
+                    customerMsg
             );
         } catch (Exception e) {
             return heuristicFallback(tx, eligible);
@@ -158,6 +171,15 @@ public class DecisionAgentService {
     }
 
     private String buildPrompt(Transaction tx, List<RecoveryAction> eligible) {
+        String langInstruction = isHinglish()
+                ? "\n\nAdditionally, compose a short, natural Hinglish SMS/email message (1-2 sentences) for the customer\n" +
+                  "regarding this action. Use casual Hindi-English mix that Indian customers find natural.\n" +
+                  "For example, for SEND_PAYMENT_LINK: 'Aapka payment fail ho gaya tha, yahan se dubara try kar sakte hain: {link}'\n" +
+                  "Include the field 'customerMessage' in your JSON response with this message."
+                : "";
+        String jsonFields = isHinglish()
+                ? "{\"action\": \"<one of the allowed actions>\", \"reasoning\": \"<one sentence>\", \"confidence\": <0-1>, \"discountPercent\": <integer or null>, \"customerMessage\": \"<short customer-facing SMS/email>\"}"
+                : "{\"action\": \"<one of the allowed actions>\", \"reasoning\": \"<one sentence>\", \"confidence\": <0-1>, \"discountPercent\": <integer or null>}";
         return """
                 You are a payment-recovery decision agent. Choose exactly ONE action from the
                 allowed list for this failed transaction, and justify it in one sentence.
@@ -169,16 +191,18 @@ public class DecisionAgentService {
                 - customer_reliability_score: %.2f
 
                 Allowed actions (you MUST pick one of these, nothing else): %s
-
+                %s
                 Respond with ONLY a JSON object, no other text:
-                {"action": "<one of the allowed actions>", "reasoning": "<one sentence>", "confidence": <0-1>, "discountPercent": <integer or null>}
+                %s
                 """.formatted(
                 tx.getAmount(),
                 tx.getFailureReason(),
                 tx.getRetryCount(),
                 tx.getSubscription() != null && tx.getSubscription().getCustomer() != null
                         ? tx.getSubscription().getCustomer().getPaymentReliabilityScore() : 0.5,
-                eligible
+                eligible,
+                langInstruction,
+                jsonFields
         );
     }
 
@@ -212,28 +236,44 @@ public class DecisionAgentService {
     private LlmDecision heuristicFallbackCheckout(CheckoutSession session, List<RecoveryAction> eligible) {
         if (eligible.contains(RecoveryAction.CHECKOUT_REMINDER)) {
             return new LlmDecision(RecoveryAction.CHECKOUT_REMINDER,
-                    "Rules-only mode: abandoned cart with retryable reason — send checkout reminder.", 0.55, null);
+                    "Rules-only mode: abandoned cart with retryable reason — send checkout reminder.", 0.55, null,
+                    hinglish("Apka cart abhi bhi save hai! Complete karo ab: {link}",
+                             "Your cart is still saved! Complete your purchase now: {link}"));
         }
         if (eligible.contains(RecoveryAction.OFFER_DISCOUNT)) {
             return new LlmDecision(RecoveryAction.OFFER_DISCOUNT,
-                    "Rules-only mode: high-value cart abandoned — offer discount to recover.", 0.5, 10);
+                    "Rules-only mode: high-value cart abandoned — offer discount to recover.", 0.5, 10,
+                    hinglish("Aapke cart pe special discount mil raha hai! Jaldi complete karo: {link}",
+                             "Special discount on your cart! Complete your order now: {link}"));
         }
         if (eligible.contains(RecoveryAction.SEND_PAYMENT_LINK)) {
             return new LlmDecision(RecoveryAction.SEND_PAYMENT_LINK,
-                    "Rules-only mode: send payment link to complete checkout.", 0.5, null);
+                    "Rules-only mode: send payment link to complete checkout.", 0.5, null,
+                    hinglish("Payment pending hai — yahan se complete kar sakte hain: {link}",
+                             "Payment pending — complete it here: {link}"));
         }
         return new LlmDecision(RecoveryAction.ESCALATE_TO_HUMAN,
                 "Rules-only mode: no automated checkout recovery action left.", 0.4, null);
     }
 
     private LlmDecision heuristicFallbackReceivable(Receivable receivable, List<RecoveryAction> eligible) {
+        if (eligible.contains(RecoveryAction.PROMISE_FOLLOWUP)) {
+            return new LlmDecision(RecoveryAction.PROMISE_FOLLOWUP,
+                    "Rules-only mode: customer promised to pay by " + receivable.getPromisedPaymentDate() + " but payment has not arrived — follow up on broken promise.", 0.6, null,
+                    hinglish("Aapne " + receivable.getPromisedPaymentDate() + " ko payment ka vaada kiya tha, lekin abhi tak payment nahi aaya. Jaldi karein.",
+                             "You promised payment by " + receivable.getPromisedPaymentDate() + " but it has not arrived yet. Please pay at the earliest."));
+        }
         if (eligible.contains(RecoveryAction.OFFER_PAYMENT_PLAN)) {
             return new LlmDecision(RecoveryAction.OFFER_PAYMENT_PLAN,
-                    "Rules-only mode: significantly overdue receivable — offer payment plan.", 0.5, 3);
+                    "Rules-only mode: significantly overdue receivable — offer payment plan.", 0.5, 3,
+                    hinglish("Aapka invoice overdue hai. Hum 3 installments mein payment plan de sakte hain — batayein kya karein?",
+                             "Your invoice is overdue. We can offer a 3-installment payment plan — let us know how to proceed."));
         }
         if (eligible.contains(RecoveryAction.SEND_REMINDER)) {
             return new LlmDecision(RecoveryAction.SEND_REMINDER,
-                    "Rules-only mode: overdue receivable — send payment reminder.", 0.55, null);
+                    "Rules-only mode: overdue receivable — send payment reminder.", 0.55, null,
+                    hinglish("Friendly reminder: aapka invoice due date cross ho chuka hai. Jaldi payment karein.",
+                             "Friendly reminder: your invoice is past due. Please make the payment at your earliest."));
         }
         return new LlmDecision(RecoveryAction.ESCALATE_TO_HUMAN,
                 "Rules-only mode: no automated receivable recovery action left.", 0.4, null);
@@ -243,21 +283,113 @@ public class DecisionAgentService {
     private LlmDecision heuristicFallback(Transaction tx, List<RecoveryAction> eligible) {
         if (eligible.contains(RecoveryAction.RETRY_NOW) && tx.getRetryCount() == 0) {
             return new LlmDecision(RecoveryAction.RETRY_NOW,
-                    "Rules-only mode: first failure on a retryable decline code — retry immediately.", 0.6, null);
+                    "Rules-only mode: first failure on a retryable decline code — retry immediately.", 0.6, null,
+                    hinglish("Aapka payment fail ho gaya tha. Hum dubara try kar rahe hain — kuch der mein paisa debit ho jayega.",
+                             "Your payment failed. We are retrying now — the amount will be debited shortly."));
         }
         if (eligible.contains(RecoveryAction.RETRY_SCHEDULED)) {
             return new LlmDecision(RecoveryAction.RETRY_SCHEDULED,
-                    "Rules-only mode: retryable failure with prior attempts — schedule after cooldown.", 0.55, null);
+                    "Rules-only mode: retryable failure with prior attempts — schedule after cooldown.", 0.55, null,
+                    hinglish("Payment problem aa raha hai. Thodi der baad hum dubara try karenge.",
+                             "Payment issue detected. We will retry after a short cooldown period."));
         }
         if (eligible.contains(RecoveryAction.OFFER_DISCOUNT)) {
             return new LlmDecision(RecoveryAction.OFFER_DISCOUNT,
-                    "Rules-only mode: high-value transaction, terminal decline — incentivize a fresh payment method.", 0.5, 10);
+                    "Rules-only mode: high-value transaction, terminal decline — incentivize a fresh payment method.", 0.5, 10,
+                    hinglish("Hum 10% discount de rahe hain taaki aap naya payment method try kar sakein: {link}",
+                             "We are offering a 10% discount so you can try a different payment method: {link}"));
         }
         if (eligible.contains(RecoveryAction.SEND_PAYMENT_LINK)) {
             return new LlmDecision(RecoveryAction.SEND_PAYMENT_LINK,
-                    "Rules-only mode: default nudge — ask the customer to update their payment method.", 0.5, null);
+                    "Rules-only mode: default nudge — ask the customer to update their payment method.", 0.5, null,
+                    hinglish("Aapka payment method update karna hai? Yahan se naya method add kar sakte hain: {link}",
+                             "Need to update your payment method? Add a new one here: {link}"));
         }
         return new LlmDecision(RecoveryAction.ESCALATE_TO_HUMAN,
                 "Rules-only mode: no automated action left in bounds.", 0.4, null);
+    }
+
+    /** Returns the Hinglish or English template based on current language setting. */
+    private String hinglish(String hinglishMsg, String englishMsg) {
+        return isHinglish() ? hinglishMsg : englishMsg;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Trace-aware overloads — same logic, but append PROPOSAL step
+    // ═══════════════════════════════════════════════════════════════
+
+    public DecisionResult decideWithMeta(Transaction tx, DecisionTrace trace) {
+        List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx, trace);
+
+        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
+        LlmDecision proposed;
+        if (usedLlm) {
+            LlmDecision llmResult = callLlm(tx, eligible);
+            usedLlm = !llmResult.reasoning().startsWith("Rules-only mode:");
+            proposed = llmResult;
+            trace.add("PROPOSAL", (usedLlm ? "LLM" : "Heuristic fallback") + " proposed " + proposed.action()
+                    + " (confidence " + String.format("%.2f", proposed.confidence()) + "): " + proposed.reasoning());
+        } else {
+            proposed = heuristicFallback(tx, eligible);
+            trace.add("PROPOSAL", "Heuristic fallback proposed " + proposed.action()
+                    + " (confidence " + String.format("%.2f", proposed.confidence()) + "): " + proposed.reasoning());
+        }
+
+        EnforcedDecision enforced = rulesEngine.enforceBounds(tx, proposed, trace);
+        boolean signoffFromEnforced = enforced.requiresHumanSignoff();
+        boolean signoffFromRules = rulesEngine.requiresHumanSignoff(tx, proposed);
+        boolean signoffRequired = signoffFromEnforced || signoffFromRules;
+        String signoffReason = signoffFromEnforced ? enforced.signoffReason() : null;
+        if (!signoffFromEnforced && signoffFromRules && tx.getRetryCount() >= 2) {
+            signoffReason = "3rd consecutive failure — requires human review before final disposition.";
+            trace.add("SIGNOFF", "3rd consecutive failure detected (retryCount=" + tx.getRetryCount() + ") — human sign-off required.");
+        }
+        if (signoffFromEnforced) {
+            trace.add("SIGNOFF", "Human sign-off required: " + signoffReason);
+        }
+
+        return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
+    }
+
+    public DecisionResult decideWithMetaCheckout(CheckoutSession session, DecisionTrace trace) {
+        List<RecoveryAction> eligible = rulesEngine.eligibleActions(session, trace);
+        LlmDecision proposed = proposeCheckout(session, eligible);
+        trace.add("PROPOSAL", "Heuristic proposed " + proposed.action()
+                + " (confidence " + String.format("%.2f", proposed.confidence()) + "): " + proposed.reasoning());
+        EnforcedDecision enforced = rulesEngine.enforceBounds(session, proposed, trace);
+        boolean signoffFromEnforced = enforced.requiresHumanSignoff();
+        boolean signoffFromRules = rulesEngine.requiresHumanSignoff(session, proposed);
+        boolean signoffRequired = signoffFromEnforced || signoffFromRules;
+        String signoffReason = signoffFromEnforced ? enforced.signoffReason() : null;
+        if (!signoffFromEnforced && signoffFromRules && session.getReminderCount() >= 2) {
+            signoffReason = "3rd reminder attempt — requires human review.";
+            trace.add("SIGNOFF", "3rd reminder on checkout session — human sign-off required.");
+        }
+        if (signoffFromEnforced) {
+            trace.add("SIGNOFF", "Human sign-off required: " + signoffReason);
+        }
+        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
+        return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
+    }
+
+    public DecisionResult decideWithMetaReceivable(Receivable receivable, DecisionTrace trace) {
+        List<RecoveryAction> eligible = rulesEngine.eligibleActions(receivable, trace);
+        LlmDecision proposed = proposeReceivable(receivable, eligible);
+        trace.add("PROPOSAL", "Heuristic proposed " + proposed.action()
+                + " (confidence " + String.format("%.2f", proposed.confidence()) + "): " + proposed.reasoning());
+        EnforcedDecision enforced = rulesEngine.enforceBounds(receivable, proposed, trace);
+        boolean signoffFromEnforced = enforced.requiresHumanSignoff();
+        boolean signoffFromRules = rulesEngine.requiresHumanSignoff(receivable, proposed);
+        boolean signoffRequired = signoffFromEnforced || signoffFromRules;
+        String signoffReason = signoffFromEnforced ? enforced.signoffReason() : null;
+        if (!signoffFromEnforced && signoffFromRules && receivable.getReminderCount() >= 2) {
+            signoffReason = "3rd reminder on overdue receivable — requires human review.";
+            trace.add("SIGNOFF", "3rd reminder on overdue receivable — human sign-off required.");
+        }
+        if (signoffFromEnforced) {
+            trace.add("SIGNOFF", "Human sign-off required: " + signoffReason);
+        }
+        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
+        return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
     }
 }

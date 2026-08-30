@@ -38,7 +38,20 @@ public class Receivable {
     private int reminderCount = 0;
     private int paymentPlanInstallments = 0;
 
+    // ── Promise-to-pay tracking ──
+
+    /** Date the customer promised to pay by. Null if no promise has been made. */
+    private LocalDate promisedPaymentDate;
+
+    /** Status of the promise-to-pay: NONE (no promise), PROMISED (pending), KEPT (paid by date), BROKEN (missed date). */
+    @Enumerated(EnumType.STRING)
+    private PromiseStatus promiseStatus = PromiseStatus.NONE;
+
     public enum ReceivableStatus {
         DUE, OVERDUE, RECOVERED, WRITTEN_OFF
+    }
+
+    public enum PromiseStatus {
+        NONE, PROMISED, KEPT, BROKEN
     }
 }

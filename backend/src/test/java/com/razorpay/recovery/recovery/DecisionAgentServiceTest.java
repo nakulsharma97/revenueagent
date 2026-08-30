@@ -34,7 +34,7 @@ class DecisionAgentServiceTest {
         boundsConfig.setRetryCooldownMinutes(60);
         RulesEngine rulesEngine = new RulesEngine(boundsConfig);
 
-        decisionAgentService = new DecisionAgentService(rulesEngine);
+        decisionAgentService = new DecisionAgentService(rulesEngine, boundsConfig);
         // Force heuristic fallback path (no LLM)
         setField(decisionAgentService, "llmEnabled", false);
         setField(decisionAgentService, "apiKey", "");
@@ -146,7 +146,7 @@ class DecisionAgentServiceTest {
         bc.setRetryCooldownMinutes(60);
         RulesEngine rulesEngine = new RulesEngine(bc);
 
-        DecisionAgentService service = new DecisionAgentService(rulesEngine);
+        DecisionAgentService service = new DecisionAgentService(rulesEngine, bc);
         setField(service, "llmEnabled", true);
         setField(service, "apiKey", "sk-ant-INVALID-KEY-FOR-TESTING");
         setField(service, "model", "claude-sonnet-4-6");
@@ -184,7 +184,7 @@ class DecisionAgentServiceTest {
         bc.setRetryCooldownMinutes(60);
         RulesEngine rulesEngine = new RulesEngine(bc);
 
-        DecisionAgentService service = new DecisionAgentService(rulesEngine);
+        DecisionAgentService service = new DecisionAgentService(rulesEngine, bc);
         setField(service, "llmEnabled", true);
         setField(service, "apiKey", "sk-ant-INVALID-KEY-FOR-TESTING");
         setField(service, "model", "claude-sonnet-4-6");

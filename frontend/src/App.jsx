@@ -99,6 +99,10 @@ export default function App() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [funnelData, setFunnelData] = useState(null);
   const [actionData, setActionData] = useState([]);
+  const [efficiencyData, setEfficiencyData] = useState([]);
+  const [allReceivables, setAllReceivables] = useState([]);
+  const [simResult, setSimResult] = useState(null);
+  const [simLoading, setSimLoading] = useState(false);
 
   useEffect(() => { if (boundsConfig) setSettingsLocal(boundsConfig); }, [boundsConfig]);
 
@@ -129,9 +133,27 @@ export default function App() {
 
   const loadFunnelData = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/metrics/funnel`); if (res.ok) setFunnelData(await res.json()); } catch (e) {} }, []);
   const loadActionData = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/metrics/actions`); if (res.ok) setActionData(await res.json()); } catch (e) {} }, []);
+  const loadEfficiencyData = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/metrics/efficiency`); if (res.ok) setEfficiencyData(await res.json()); } catch (e) {} }, []);
+  const loadReceivables = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/recovery/receivables`); if (res.ok) setAllReceivables(await res.json()); } catch (e) {} }, []);
 
-  useEffect(() => { loadMetrics(); loadReviewCount(); loadActionLog(); loadBoundsConfig(); loadFunnelData(); loadActionData(); }, []);
-  useEffect(() => { if (funnelRefresh > 0) { loadReviewCount(); loadActionLog(); loadFunnelData(); loadActionData(); } }, [funnelRefresh]);
+  async function simulateBounds() {
+    setSimLoading(true);
+    setSimResult(null);
+    try {
+      const params = new URLSearchParams({
+        maxRetries: settingsLocal.maxRetries ?? 3,
+        maxDiscountPercent: settingsLocal.maxDiscountPercent ?? 15,
+        minAmountForDiscount: settingsLocal.minAmountForDiscount ?? 500,
+        retryCooldownMinutes: settingsLocal.retryCooldownMinutes ?? 60,
+      });
+      const res = await fetch(`${API_BASE}/api/metrics/simulate?${params}`);
+      if (res.ok) setSimResult(await res.json());
+    } catch (e) { console.error('Simulation failed:', e); }
+    finally { setSimLoading(false); }
+  }
+
+  useEffect(() => { loadMetrics(); loadReviewCount(); loadActionLog(); loadBoundsConfig(); loadFunnelData(); loadActionData(); loadEfficiencyData(); loadReceivables(); }, []);
+  useEffect(() => { if (funnelRefresh > 0) { loadReviewCount(); loadActionLog(); loadFunnelData(); loadActionData(); loadEfficiencyData(); } }, [funnelRefresh]);
 
   async function handleRunBatch() {
     setLoading(true); setAttempts([]); setStreamCount(null);
@@ -183,7 +205,7 @@ export default function App() {
 
       {/* ROW 5: Pending Human Review + Revenue by Source — balanced heights */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 14, alignItems: 'start' }}>
-        <div style={{ width: '100%', minWidth: 0, overflow: 'hidden' }}><PendingReview key={funnelRefresh} /></div>
+        <div style={{ width: '100%', minWidth: 0, overflow: 'hidden' }}><PendingReview key={funnelRefresh} onResolved={() => { loadReviewCount(); setFunnelRefresh(n => n + 1); }} /></div>
         {metrics?.bySource && (<div className="card" style={{ width: '100%', minWidth: 0 }}>
           <div className="section-title" style={{ marginBottom: 10 }}>REVENUE BY SOURCE</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
@@ -253,7 +275,48 @@ export default function App() {
           </div>
           {allTransactions.length > 200 && <div style={{ padding: '10px 14px', textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', borderTop: '1px solid var(--border)' }}>Showing 200 of {allTransactions.length}</div>}
         </div>
-      </>)}
+      </>)})
+
+      {/* Receivables section with promise-to-pay status */}
+      {allReceivables.length > 0 && (<>
+        <div style={{ marginTop: 24, marginBottom: 12 }}>
+          <h3 style={{ fontFamily: 'var(--font-body)', fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>Overdue Receivables</h3>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>B2B invoices with promise-to-pay tracking</div>
+        </div>
+        <div className="card" style={FW}>
+          <div className="table-scroll">
+            <table className="main-table">
+              <thead><tr>
+                {['ID', 'Business', 'Amount', 'Days Overdue', 'Promise Status', 'Promise Date', 'Status'].map(h => (
+                  <th key={h}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>{allReceivables.slice(0, 100).map(r => {
+                const promiseColors = { NONE: 'var(--text-muted)', PROMISED: 'var(--gold)', KEPT: 'var(--green)', BROKEN: 'var(--red)' };
+                const promiseLabels = { NONE: 'No Promise', PROMISED: 'Promised', KEPT: 'Promise Kept', BROKEN: 'Promise Broken' };
+                const pColor = promiseColors[r.promiseStatus] || 'var(--text-muted)';
+                return (
+                  <tr key={r.id}>
+                    <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--gold)', fontWeight: 600 }}>#{r.id}</td>
+                    <td style={{ color: 'var(--text-secondary)' }}>{r.businessName || r.businessCustomerId}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text)' }}>{fmt(r.invoiceAmount)}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'center', color: r.daysOverdue > 30 ? 'var(--red)' : 'var(--text-secondary)' }}>{r.daysOverdue}</td>
+                    <td>
+                      <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 'var(--radius-full)', background: pColor + '18', color: pColor, fontWeight: 600, fontSize: 11, whiteSpace: 'nowrap' }}>
+                        {r.promiseStatus === 'BROKEN' ? '✕ ' : r.promiseStatus === 'KEPT' ? '✓ ' : r.promiseStatus === 'PROMISED' ? '● ' : ''}{promiseLabels[r.promiseStatus]}
+                      </span>
+                    </td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>{r.promisedPaymentDate || '—'}</td>
+                    <td>
+                      <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 'var(--radius-full)', background: r.status === 'RECOVERED' ? 'var(--green-bg)' : r.status === 'WRITTEN_OFF' ? 'var(--red-bg)' : 'var(--amber-bg)', color: r.status === 'RECOVERED' ? 'var(--green)' : r.status === 'WRITTEN_OFF' ? 'var(--red)' : 'var(--amber)', fontWeight: 600, fontSize: 11 }}>{r.status?.replaceAll('_', ' ')}</span>
+                    </td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+        </div>
+      </>)})
     </>);
   }
 
@@ -341,11 +404,12 @@ export default function App() {
     const chartsLoaded = funnelData && actionData.length > 0;
     return (<>
       <PageHeader title="Reports" subtitle="Recovery performance and financial insights across all revenue sources." />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 16 }}>
         <SummaryStat label="TOTAL RECOVERED" value={fmt(metrics?.revenueRecovered)} color="var(--green)" />
         <SummaryStat label="RECOVERY RATE" value={metrics ? pct(metrics.recoveryRatePercent) : '—'} color="var(--gold)" />
         <SummaryStat label="NET REVENUE" value={fmt(metrics?.netRecovered)} color="var(--gold-bright)" />
         <SummaryStat label="BASELINE" value={fmt(metrics?.baselineNetRecovered)} />
+        <SummaryStat label="PROMISE KEEP RATE" value={metrics ? `${metrics.promiseKeepRate ?? 0}%` : '—'} color="var(--green)" />
       </div>
       <div className="card" style={{ marginBottom: 16, ...FW }}>
         <div className="section-title" style={{ marginBottom: 12 }}>RECOVERY BY SOURCE</div>
@@ -360,10 +424,52 @@ export default function App() {
       <div style={{ marginBottom: 16 }}>
         {metrics ? <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} /> : <SkeletonCard lines={2} height={280} />}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 16, marginBottom: 16 }}>
         {chartsLoaded ? <div style={FW}><FunnelChart data={funnelData} /></div> : <SkeletonCard height={320} />}
         {chartsLoaded ? <div style={FW}><ActionBreakdownChart data={actionData} /></div> : <SkeletonCard height={320} />}
       </div>
+
+      {/* Action Efficiency / ROI table */}
+      {efficiencyData.length > 0 && (
+        <div className="card" style={FW}>
+          <div className="section-title" style={{ marginBottom: 12 }}>ACTION EFFICIENCY — ROI RANKING</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>Recovered per rupee spent on each intervention type. Sorted by ROI descending.</div>
+          <div className="table-scroll">
+            <table className="main-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 40 }}>#</th>
+                  <th>ACTION</th>
+                  <th style={{ textAlign: 'right' }}>ATTEMPTS</th>
+                  <th style={{ textAlign: 'right' }}>SUCCESSES</th>
+                  <th style={{ textAlign: 'right' }}>RECOVERED</th>
+                  <th style={{ textAlign: 'right' }}>COST</th>
+                  <th style={{ textAlign: 'right' }}>ROI (₹/₹)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {efficiencyData.map((row, i) => (
+                  <tr key={row.action}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>{i + 1}</td>
+                    <td style={{ fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap' }}>{row.action.replaceAll('_', ' ')}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--text-secondary)' }}>{row.totalAttempts}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: row.successCount > 0 ? 'var(--green)' : 'var(--text-muted)' }}>{row.successCount}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: row.totalRecovered > 0 ? 'var(--green)' : 'var(--text-muted)', fontWeight: 600 }}>{fmt(row.totalRecovered)}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: row.totalCost > 0 ? 'var(--amber)' : 'var(--text-muted)' }}>{row.totalCost > 0 ? fmt(row.totalCost) : '—'}</td>
+                    <td style={{ textAlign: 'right' }}>
+                      {row.recoveredPerRupeeSpent != null ? (
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--gold-bright)', fontSize: 14 }}>{Number(row.recoveredPerRupeeSpent).toFixed(1)}x</span>
+                      ) : (
+                        <span style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>{row.costNote}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </>);
   }
 
@@ -379,7 +485,7 @@ export default function App() {
         <SummaryStat label="WARNING" value={warningCount} color="var(--amber)" />
         <SummaryStat label="INFO" value={Math.max(0, infoCount)} />
       </div>
-      <PendingReview key={`alert-${funnelRefresh}`} forceShow />
+      <PendingReview key={`alert-${funnelRefresh}`} forceShow onResolved={() => { loadReviewCount(); setFunnelRefresh(n => n + 1); }} />
     </>);
   }
 
@@ -401,7 +507,55 @@ export default function App() {
                 onFocus={e => e.target.style.borderColor = 'var(--gold)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
             </div>))}
           </div>
-          <button onClick={saveSettings} disabled={settingsSaving} style={{ marginTop: 20, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 28px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 13, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
+
+          {/* Preview Impact button */}
+          <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button onClick={simulateBounds} disabled={simLoading}
+              style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '8px 18px', fontFamily: 'var(--font-body)', fontWeight: 500, fontSize: 12, cursor: simLoading ? 'not-allowed' : 'pointer', transition: 'all var(--transition-fast)', opacity: simLoading ? 0.5 : 1 }}
+              onMouseEnter={e => { if (!simLoading) { e.currentTarget.style.borderColor = 'var(--gold)'; e.currentTarget.style.color = 'var(--gold)'; } }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            >{simLoading ? 'Simulating…' : '◈ Preview Impact'}</button>
+            <span style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic' }}>Estimated on current batch — not a live re-run</span>
+          </div>
+
+          {/* Simulation Result */}
+          {simResult && (
+            <div style={{ marginTop: 14, padding: '14px 16px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+              <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: 10 }}>Simulation Result — Projected Impact</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+                {[
+                  { label: 'Projected Net', value: fmt(simResult.simulated?.netRecovered), color: 'var(--gold-bright)' },
+                  { label: 'Δ Net Revenue', value: `${simResult.deltaNet >= 0 ? '+' : ''}${fmt(simResult.deltaNet)}`, color: simResult.deltaNet >= 0 ? 'var(--green)' : 'var(--red)' },
+                  { label: 'Δ Revenue', value: `${simResult.deltaRevenue >= 0 ? '+' : ''}${fmt(simResult.deltaRevenue)}`, color: simResult.deltaRevenue >= 0 ? 'var(--green)' : 'var(--red)' },
+                  { label: 'Δ Cost', value: `${simResult.deltaCost >= 0 ? '+' : ''}${fmt(simResult.deltaCost)}`, color: simResult.deltaCost > 0 ? 'var(--amber)' : 'var(--text-muted)' },
+                  { label: 'Recovery Rate', value: `${simResult.simulated?.recoveryRatePercent ?? 0}%`, color: 'var(--gold)' },
+                  { label: 'Δ Recoveries', value: `${simResult.deltaRecoveredCount >= 0 ? '+' : ''}${simResult.deltaRecoveredCount}`, color: simResult.deltaRecoveredCount >= 0 ? 'var(--green)' : 'var(--red)' },
+                ].map(f => (
+                  <div key={f.label} style={{ padding: '8px 10px', background: 'var(--surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: 4 }}>{f.label}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 700, color: f.color, lineHeight: 1.2 }}>{f.value}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 10, fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                Bounds: maxRetries={simResult.assumptions?.maxRetries} · maxDiscount={simResult.assumptions?.maxDiscountPercent}% · minAmount=₹{simResult.assumptions?.minAmountForDiscount} · cooldown={simResult.assumptions?.retryCooldownMinutes}min
+              </div>
+            </div>
+          )}
+
+          {/* Language toggle */}
+          <div style={{ marginTop: 16, padding: '14px 16px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: 8 }}>Customer Message Language</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[{ val: 'en', label: 'English' }, { val: 'hinglish', label: 'Hinglish' }].map(opt => (
+                <button key={opt.val} onClick={() => setSettingsLocal(p => ({ ...p, language: opt.val }))}
+                  style={{ flex: 1, padding: '10px 16px', borderRadius: 'var(--radius-sm)', border: '1px solid', borderColor: settingsLocal.language === opt.val ? 'var(--gold)' : 'var(--border)', background: settingsLocal.language === opt.val ? 'var(--gold-bg)' : 'var(--surface)', color: settingsLocal.language === opt.val ? 'var(--gold)' : 'var(--text-secondary)', fontFamily: 'var(--font-body)', fontWeight: settingsLocal.language === opt.val ? 600 : 400, fontSize: 13, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
+                >{opt.label}</button>
+              ))}
+            </div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>When set to Hinglish, the agent generates natural Hindi-English mix SMS/email messages for customers (e.g. "Aapka payment fail ho gaya tha, yahan se dubara try kar sakte hain").</div>
+          </div>
+          <button onClick={saveSettings} disabled={settingsSaving} style={{ marginTop: 16, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 28px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 13, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--gold-bright)'} onMouseLeave={e => e.currentTarget.style.background = 'var(--gold)'}
           >{settingsSaving ? 'Saving…' : 'Save Configuration'}</button>
         </div>
