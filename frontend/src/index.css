@@ -66,6 +66,15 @@
   --radius-lg: 14px;
   --radius-full: 9999px;
 
+  /* ── Spacing ── */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 20px;
+  --space-2xl: 24px;
+  --space-3xl: 32px;
+
   /* ── Transitions ── */
   --transition-fast: 150ms ease;
   --transition-base: 200ms ease;
@@ -83,29 +92,6 @@ html, body {
   line-height: 1.5;
   font-size: 14px;
   overflow-x: hidden;
-}
-
-main > div {
-  min-width: 0;
-}
-
-main table {
-  display: table;
-  width: 100%;
-  table-layout: auto;
-}
-
-main table td, main table th {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 0;
-}
-
-/* Allow reason column to wrap */
-main table td:last-child {
-  white-space: normal;
-  min-width: 120px;
 }
 
 #root {
@@ -134,7 +120,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 20px;
+  padding: var(--space-xl);
   transition: border-color var(--transition-fast);
 }
 
@@ -148,6 +134,57 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
 }
+
+/* ── Section header inside cards ── */
+.section-title {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-bottom: var(--space-lg);
+}
+
+/* ── Table styles ── */
+.main-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.main-table thead th {
+  padding: 10px 14px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.main-table tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.main-table tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+/* ── Table container with internal scroll ── */
+.table-scroll {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 420px;
+}
+
+.table-scroll::-webkit-scrollbar { width: 5px; height: 5px; }
+.table-scroll::-webkit-scrollbar-track { background: transparent; }
+.table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
 
 /* ── Animations ── */
 @keyframes fadeIn {
@@ -170,8 +207,36 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   100% { background-position: 200% 0; }
 }
 
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.7; }
+}
+
 .animate-in {
   animation: fadeIn 0.3s ease-out forwards;
+}
+
+/* ── Skeleton loader ── */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-secondary) 25%, var(--surface-elevated) 50%, var(--bg-secondary) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+.skeleton-line {
+  height: 14px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.skeleton-line.short { width: 40%; }
+.skeleton-line.medium { width: 65%; }
+.skeleton-line.long { width: 90%; }
+
+.skeleton-circle {
+  border-radius: 50%;
+  animation: skeletonPulse 1.5s ease-in-out infinite;
 }
 
 /* ── Utility ── */

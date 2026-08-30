@@ -27,7 +27,7 @@ export default function PendingReview({ forceShow }) {
   );
 
   return (
-    <div className="card" style={{ border: '1px solid var(--red-border)', background: 'var(--surface)', width: '100%', minWidth: 0 }}>
+    <div className="card" style={{ border: '1px solid var(--red-border)', background: 'var(--surface)', width: '100%', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 700, color: 'var(--red)' }}>⚠ Pending Human Review</span>
@@ -35,27 +35,29 @@ export default function PendingReview({ forceShow }) {
         </div>
         <span style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)' }}>Bounded Workflow — Escalated Per Rules</span>
       </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      <div className="table-scroll" style={{ flex: 1, maxHeight: 300 }}>
+        <table className="main-table">
           <thead>
-            <tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left' }}>
-              {['TXN', 'SOURCE', 'ACTION', 'OUTCOME', 'REASON'].map(h => (
-                <th key={h} style={{ padding: '8px 10px', fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
-              ))}
+            <tr>
+              <th style={{ width: 50 }}>TXN</th>
+              <th style={{ width: 100 }}>SOURCE</th>
+              <th style={{ width: 140 }}>ACTION</th>
+              <th style={{ width: 90 }}>OUTCOME</th>
+              <th>REASON</th>
             </tr>
           </thead>
           <tbody>
             {items.slice(0, 50).map(a => (
-              <tr key={a.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                <td style={{ padding: '8px 10px', color: 'var(--gold)', fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 12 }}>#{a.transaction?.id || a.checkoutSession?.id || a.receivable?.id}</td>
-                <td style={{ padding: '8px 10px' }}>
+              <tr key={a.id}>
+                <td style={{ color: 'var(--gold)', fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 12 }}>#{a.transaction?.id || a.checkoutSession?.id || a.receivable?.id}</td>
+                <td>
                   <span style={{ padding: '2px 6px', borderRadius: 'var(--radius-full)', background: a.sourceType === 'PAYMENT' ? 'var(--gold-bg)' : a.sourceType === 'CHECKOUT' ? 'var(--amber-bg)' : 'var(--green-bg)', color: a.sourceType === 'PAYMENT' ? 'var(--gold)' : a.sourceType === 'CHECKOUT' ? 'var(--amber)' : 'var(--green)', fontWeight: 600, fontSize: 10 }}>{a.sourceType || 'PAYMENT'}</span>
                 </td>
-                <td style={{ padding: '8px 10px', color: 'var(--text-secondary)' }}>{a.actionTaken?.replaceAll('_', ' ')}</td>
-                <td style={{ padding: '8px 10px' }}>
+                <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{a.actionTaken?.replaceAll('_', ' ')}</td>
+                <td>
                   <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 'var(--radius-full)', background: a.outcome === 'SUCCESS' ? 'var(--green-bg)' : a.outcome === 'FAILED' ? 'var(--red-bg)' : 'var(--amber-bg)', color: a.outcome === 'SUCCESS' ? 'var(--green)' : a.outcome === 'FAILED' ? 'var(--red)' : 'var(--amber)', fontWeight: 600, fontSize: 11 }}>{a.outcome}</span>
                 </td>
-                <td style={{ padding: '8px 10px', color: 'var(--red)', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.signoffReason || 'No reason provided'}</td>
+                <td style={{ color: 'var(--red)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.signoffReason || 'No reason provided'}</td>
               </tr>
             ))}
           </tbody>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import BoundsRegister from './components/BoundsRegister';
 import StatCard from './components/StatCard';
 import RecoveryChart from './components/RecoveryChart';
@@ -23,6 +23,8 @@ const NAV_ITEMS = [
 ];
 
 const FW = { width: '100%', minWidth: 0 };
+const GAP = { gap: 16 };
+const GAP_LG = { gap: 20 };
 
 /* Reusable page header */
 function PageHeader({ title, subtitle, right }) {
@@ -40,9 +42,9 @@ function PageHeader({ title, subtitle, right }) {
 /* Reusable summary stat block */
 function SummaryStat({ label, value, color }) {
   return (
-    <div style={{ flex: 1, minWidth: 0, padding: '16px 20px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-      <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: 6 }}>{label}</div>
-      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 24, fontWeight: 700, color: color || 'var(--text)' }}>{value}</div>
+    <div style={{ flex: 1, minWidth: 0, padding: '14px 18px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+      <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700, color: color || 'var(--text)', lineHeight: 1.2 }}>{value}</div>
     </div>
   );
 }
@@ -50,16 +52,28 @@ function SummaryStat({ label, value, color }) {
 /* Reusable empty state */
 function EmptyState({ icon, title, description, action, onAction }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 40px', ...FW }}>
-      <div style={{ fontSize: 48, marginBottom: 20, opacity: 0.15 }}>{icon}</div>
-      <div style={{ fontFamily: 'var(--font-body)', fontSize: 18, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>{title}</div>
-      <div style={{ fontFamily: 'var(--font-body)', fontSize: 14, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 480, lineHeight: 1.6, marginBottom: action ? 24 : 0 }}>{description}</div>
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '64px 40px', ...FW }}>
+      <div style={{ fontSize: 44, marginBottom: 16, opacity: 0.15 }}>{icon}</div>
+      <div style={{ fontFamily: 'var(--font-body)', fontSize: 17, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>{title}</div>
+      <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 440, lineHeight: 1.6, marginBottom: action ? 20 : 0 }}>{description}</div>
       {action && (
-        <button onClick={onAction} style={{ background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 24px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 14, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
+        <button onClick={onAction} style={{ background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 24px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 13, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
           onMouseEnter={e => e.currentTarget.style.background = 'var(--gold-bright)'}
           onMouseLeave={e => e.currentTarget.style.background = 'var(--gold)'}
         >{action}</button>
       )}
+    </div>
+  );
+}
+
+/* Skeleton loader for reports */
+function SkeletonCard({ lines = 3, height }) {
+  return (
+    <div className="card" style={{ ...FW, minHeight: height }}>
+      <div className="skeleton skeleton-line short" style={{ marginBottom: 12 }} />
+      <div className="skeleton skeleton-line long" style={{ marginBottom: 8 }} />
+      <div className="skeleton skeleton-line medium" style={{ marginBottom: 8 }} />
+      {lines > 2 && <div className="skeleton skeleton-line long" />}
     </div>
   );
 }
@@ -137,40 +151,47 @@ export default function App() {
 
   // ═══ 1. OVERVIEW ═══
   function renderOverview() {
-    const totalRecovered = metrics?.recoveredCount ?? 0;
-    const totalFailed = metrics ? metrics.totalAtRisk - metrics.recoveredCount : 0;
-    const pendingReview = alerts.length;
-    const successCount = attempts.filter(a => a.outcome === 'SUCCESS').length;
-    const failCount = attempts.filter(a => a.outcome === 'FAILED').length;
-    const skipCount = attempts.filter(a => a.outcome === 'PENDING').length;
     return (<>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
+      {/* ROW 1: 4 stat cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 16 }}>
         <StatCard label="TRANSACTIONS AT RISK" value={metrics?.totalAtRisk ?? '—'} sub="Total flagged" icon="⚠" iconBg="rgba(216,155,50,0.12)" iconColor="var(--amber)" />
         <StatCard label="RECOVERED" value={metrics?.recoveredCount ?? '—'} sub="Successful recoveries" icon="✓" iconBg="var(--green-bg)" iconColor="var(--green)" />
         <StatCard label="RECOVERY RATE" value={metrics ? pct(metrics.recoveryRatePercent) : '—'} sub="Recovery success rate" icon="▮" iconBg="var(--gold-bg)" iconColor="var(--gold)" />
         <StatCard label="NET REVENUE" value={metrics ? fmt(metrics.netRecovered) : '—'} sub={metrics ? `${fmt(metrics.revenueRecovered)} recovered · ${fmt(metrics.interventionCost)} cost` : ''} icon="₹" iconBg="var(--gold-bg)" iconColor="var(--gold-bright)" valueColor="var(--gold-bright)" />
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 24 }}>
-        <div style={FW}>{metrics && <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} />}</div>
-        <div style={FW}><BoundsRegister /></div>
+
+      {/* ROW 2: Net Revenue chart + Bounds Register */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14, marginBottom: 16 }}>
+        <div style={{ width: '100%', minWidth: 0 }}>{metrics && <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} />}</div>
+        <div style={{ width: '100%', minWidth: 0 }}><BoundsRegister /></div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 24 }}>
-        <div style={FW}><FunnelChart data={funnelData} /></div>
-        <div style={FW}><ActionBreakdownChart data={actionData} /></div>
+
+      {/* ROW 3: Recovery Pipeline + Success Rate by Action */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14, marginBottom: 16 }}>
+        <div style={{ width: '100%', minWidth: 0 }}><FunnelChart data={funnelData} /></div>
+        <div style={{ width: '100%', minWidth: 0 }}><ActionBreakdownChart data={actionData} /></div>
       </div>
-      <div className="card" style={{ marginBottom: 24, ...FW }}>
-        <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 16 }}>ALLOWED ACTIONS — LLM MAY ONLY PICK FROM THIS LIST</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+
+      {/* ROW 4: Allowed Actions — full width */}
+      <div className="card" style={{ marginBottom: 16, ...FW }}>
+        <div className="section-title">ALLOWED ACTIONS — LLM MAY ONLY PICK FROM THIS LIST</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
           {[ { action: 'Retry Now', desc: 'Immediate retry', icon: '↻', bg: 'var(--green-bg)' }, { action: 'Retry Scheduled', desc: 'After cooldown', icon: '⏱', bg: 'var(--gold-bg)' }, { action: 'Send Payment Link', desc: 'Update payment', icon: '🔗', bg: 'var(--amber-bg)' }, { action: 'Offer Discount', desc: 'Max 15%', icon: '%', bg: 'var(--gold-bg)' }, { action: 'Escalate to Human', desc: 'Collections team', icon: '👤', bg: 'var(--red-bg)' }, { action: 'Checkout Reminder', desc: 'Cart recovery', icon: '🛒', bg: 'var(--amber-bg)' }, { action: 'Send Reminder', desc: 'B2B invoice', icon: '📧', bg: 'var(--gold-bg)' }, { action: 'Offer Payment Plan', desc: 'Installments', icon: '📋', bg: 'var(--green-bg)' },
-          ].map(a => (<div key={a.action} style={{ padding: '14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12, background: 'var(--surface)' }}><div style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: a.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>{a.icon}</div><div><div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{a.action}</div><div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)' }}>{a.desc}</div></div></div>))}
+          ].map(a => (<div key={a.action} style={{ padding: '10px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface)' }}><div style={{ width: 30, height: 30, borderRadius: 'var(--radius-sm)', background: a.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>{a.icon}</div><div><div style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{a.action}</div><div style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)' }}>{a.desc}</div></div></div>))}
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 24 }}>
-        <div style={FW}><PendingReview key={funnelRefresh} /></div>
-        {metrics?.bySource && (<div className="card" style={FW}>
-          <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 14 }}>REVENUE BY SOURCE</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-            {Object.entries(metrics.bySource).map(([key, src]) => (<div key={key} style={{ padding: '14px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}><div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.04em', marginBottom: 8 }}>{src.label}</div><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>{src.atRisk}</span><span style={{ fontSize: 12, color: 'var(--text-muted)' }}>at risk</span></div><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 4 }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 600, color: 'var(--green)' }}>{src.recovered}</span><span style={{ fontSize: 12, color: 'var(--text-muted)' }}>recovered</span></div></div>))}
+
+      {/* ROW 5: Pending Human Review + Revenue by Source — balanced heights */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 14, alignItems: 'start' }}>
+        <div style={{ width: '100%', minWidth: 0, overflow: 'hidden' }}><PendingReview key={funnelRefresh} /></div>
+        {metrics?.bySource && (<div className="card" style={{ width: '100%', minWidth: 0 }}>
+          <div className="section-title" style={{ marginBottom: 10 }}>REVENUE BY SOURCE</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+            {Object.entries(metrics.bySource).map(([key, src]) => (<div key={key} style={{ padding: '14px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+              <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.04em', marginBottom: 8 }}>{src.label}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>{src.atRisk}</span><span style={{ fontSize: 11, color: 'var(--text-muted)' }}>at risk</span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 600, color: 'var(--green)' }}>{src.recovered}</span><span style={{ fontSize: 11, color: 'var(--text-muted)' }}>recovered</span></div>
+            </div>))}
           </div>
         </div>)}
       </div>
@@ -181,8 +202,8 @@ export default function App() {
   function renderBoundRegister() {
     return (<>
       <PageHeader title="Bound Register" subtitle="Non-negotiable constraints enforced by the RulesEngine before any LLM output executes." />
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 16, marginBottom: 24 }}><BoundsRegister expanded /></div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 }}>
+      <div style={{ marginBottom: 16 }}><BoundsRegister expanded /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
         <SummaryStat label="MAX RETRIES" value={boundsConfig?.maxRetries ?? 3} color="var(--gold)" />
         <SummaryStat label="MAX DISCOUNT" value={`${boundsConfig?.maxDiscountPercent ?? 15}%`} color="var(--gold-bright)" />
         <SummaryStat label="COOLDOWN" value={`${boundsConfig?.retryCooldownMinutes ?? 60} min`} color="var(--amber)" />
@@ -202,30 +223,30 @@ export default function App() {
       {txCount === 0 ? (
         <EmptyState icon="⇄" title="No transactions loaded" description="Run a recovery batch to populate the transaction ledger with payment failures, checkout abandonments, and receivables." action="Run Batch ▶" onAction={handleRunBatch} />
       ) : (<>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 16 }}>
           <SummaryStat label="TOTAL" value={txCount} color="var(--text)" />
           <SummaryStat label="RECOVERED" value={recovered} color="var(--green)" />
           <SummaryStat label="IN RECOVERY" value={inRecovery} color="var(--gold)" />
           <SummaryStat label="LOST" value={lost} color="var(--red)" />
         </div>
         <div className="card" style={FW}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead><tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left' }}>
+          <div className="table-scroll">
+            <table className="main-table">
+              <thead><tr>
                 {['ID', 'Amount', 'Failure Reason', 'Retries', 'Status', 'Created'].map(h => (
-                  <th key={h} style={{ padding: '10px 14px', fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
+                  <th key={h}>{h}</th>
                 ))}
               </tr></thead>
               <tbody>{allTransactions.slice(0, 200).map(tx => (
-                <tr key={tx.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', color: 'var(--gold)', fontWeight: 600 }}>#{tx.id}</td>
-                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text)' }}>{fmt(tx.amount)}</td>
-                  <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', textTransform: 'capitalize' }}>{tx.failureReason?.replaceAll('_', ' ').toLowerCase()}</td>
-                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', textAlign: 'center', color: 'var(--text-secondary)' }}>{tx.retryCount}</td>
-                  <td style={{ padding: '10px 14px' }}>
+                <tr key={tx.id}>
+                  <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--gold)', fontWeight: 600 }}>#{tx.id}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text)' }}>{fmt(tx.amount)}</td>
+                  <td style={{ color: 'var(--text-secondary)', textTransform: 'capitalize' }}>{tx.failureReason?.replaceAll('_', ' ').toLowerCase()}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'center', color: 'var(--text-secondary)' }}>{tx.retryCount}</td>
+                  <td>
                     <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 'var(--radius-full)', background: tx.status === 'RECOVERED' ? 'var(--green-bg)' : tx.status === 'LOST' ? 'var(--red-bg)' : tx.status === 'IN_RECOVERY' ? 'var(--gold-bg)' : 'var(--amber-bg)', color: tx.status === 'RECOVERED' ? 'var(--green)' : tx.status === 'LOST' ? 'var(--red)' : tx.status === 'IN_RECOVERY' ? 'var(--gold)' : 'var(--amber)', fontWeight: 600, fontSize: 11 }}>{tx.status?.replaceAll('_', ' ')}</span>
                   </td>
-                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>{tx.createdAt ? new Date(tx.createdAt).toLocaleDateString() : '—'}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>{tx.createdAt ? new Date(tx.createdAt).toLocaleDateString() : '—'}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -241,7 +262,6 @@ export default function App() {
     const sorted = [...(actionLog.length > 0 ? actionLog : attempts)].sort((a, b) => b.id - a.id);
     const successCount = sorted.filter(a => a.outcome === 'SUCCESS').length;
     const failCount = sorted.filter(a => a.outcome === 'FAILED').length;
-    const skipCount = sorted.filter(a => a.outcome === 'PENDING').length;
     const totalCost = sorted.reduce((s, a) => s + (a.interventionCost || 0), 0);
     const totalRecovered = sorted.filter(a => a.outcome === 'SUCCESS').reduce((s, a) => s + (a.amountRecovered || 0), 0);
     return (<>
@@ -249,7 +269,7 @@ export default function App() {
       {sorted.length === 0 ? (
         <EmptyState icon="⚡" title="No actions executed yet" description="Run a recovery batch to see agent decisions, actions taken, outcomes, and recovery details across payment failures, checkout abandonments, and receivables." action="Run Batch ▶" onAction={handleRunBatch} />
       ) : (<>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 16, marginBottom: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 16 }}>
           <SummaryStat label="TOTAL ACTIONS" value={sorted.length} />
           <SummaryStat label="SUCCEEDED" value={successCount} color="var(--green)" />
           <SummaryStat label="FAILED" value={failCount} color="var(--red)" />
@@ -257,24 +277,23 @@ export default function App() {
           <SummaryStat label="INTERVENTION COST" value={fmt(totalCost)} color="var(--amber)" />
         </div>
         <div className="card" style={FW}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead><tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left' }}>
+          <div className="table-scroll">
+            <table className="main-table">
+              <thead><tr>
                 {['TXN', 'SOURCE', 'ACTION', 'OUTCOME', 'AMOUNT', 'COST', 'REASONING', 'TIME'].map(h => (
-                  <th key={h} style={{ padding: '10px 14px', fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                  <th key={h}>{h}</th>
                 ))}
               </tr></thead>
               <tbody>{sorted.slice(0, 300).map(a => (
-                <tr key={a.id} style={{ borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer' }} onClick={() => setSelectedAttempt(a)}
-                  onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-hover)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', color: 'var(--gold)', fontWeight: 600 }}>#{a.transaction?.id || a.checkoutSession?.id || a.receivable?.id}</td>
-                  <td style={{ padding: '10px 14px' }}><span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: a.sourceType === 'PAYMENT' ? 'var(--gold-bg)' : a.sourceType === 'CHECKOUT' ? 'var(--amber-bg)' : 'var(--green-bg)', color: a.sourceType === 'PAYMENT' ? 'var(--gold)' : a.sourceType === 'CHECKOUT' ? 'var(--amber)' : 'var(--green)', fontWeight: 600, fontSize: 10, whiteSpace: 'nowrap' }}>{a.sourceType}</span></td>
-                  <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{a.actionTaken?.replaceAll('_', ' ')}</td>
-                  <td style={{ padding: '10px 14px' }}><span style={{ padding: '3px 10px', borderRadius: 'var(--radius-full)', background: a.outcome === 'SUCCESS' ? 'var(--green-bg)' : a.outcome === 'FAILED' ? 'var(--red-bg)' : 'var(--amber-bg)', color: a.outcome === 'SUCCESS' ? 'var(--green)' : a.outcome === 'FAILED' ? 'var(--red)' : 'var(--amber)', fontWeight: 600, fontSize: 11 }}>{a.outcome}</span></td>
-                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', textAlign: 'right', color: a.amountRecovered > 0 ? 'var(--green)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.amountRecovered > 0 ? fmt(a.amountRecovered) : '—'}</td>
-                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.interventionCost > 0 ? fmt(a.interventionCost) : '—'}</td>
-                  <td style={{ padding: '10px 14px', color: 'var(--text-muted)', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.reasoning}</td>
-                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.executedAt ? new Date(a.executedAt).toLocaleTimeString() : '—'}</td>
+                <tr key={a.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedAttempt(a)}>
+                  <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--gold)', fontWeight: 600 }}>#{a.transaction?.id || a.checkoutSession?.id || a.receivable?.id}</td>
+                  <td><span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: a.sourceType === 'PAYMENT' ? 'var(--gold-bg)' : a.sourceType === 'CHECKOUT' ? 'var(--amber-bg)' : 'var(--green-bg)', color: a.sourceType === 'PAYMENT' ? 'var(--gold)' : a.sourceType === 'CHECKOUT' ? 'var(--amber)' : 'var(--green)', fontWeight: 600, fontSize: 10, whiteSpace: 'nowrap' }}>{a.sourceType}</span></td>
+                  <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{a.actionTaken?.replaceAll('_', ' ')}</td>
+                  <td><span style={{ padding: '3px 10px', borderRadius: 'var(--radius-full)', background: a.outcome === 'SUCCESS' ? 'var(--green-bg)' : a.outcome === 'FAILED' ? 'var(--red-bg)' : 'var(--amber-bg)', color: a.outcome === 'SUCCESS' ? 'var(--green)' : a.outcome === 'FAILED' ? 'var(--red)' : 'var(--amber)', fontWeight: 600, fontSize: 11 }}>{a.outcome}</span></td>
+                  <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: a.amountRecovered > 0 ? 'var(--green)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.amountRecovered > 0 ? fmt(a.amountRecovered) : '—'}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.interventionCost > 0 ? fmt(a.interventionCost) : '—'}</td>
+                  <td style={{ color: 'var(--text-muted)', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.reasoning}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.executedAt ? new Date(a.executedAt).toLocaleTimeString() : '—'}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -290,7 +309,6 @@ export default function App() {
     const successCount = attempts.filter(a => a.outcome === 'SUCCESS').length;
     const failCount = attempts.filter(a => a.outcome === 'FAILED').length;
     const signoffCount = attempts.filter(a => a.requiresHumanSignoff).length;
-    const llmCount = attempts.filter(a => a.llmDriven).length;
     return (<>
       <PageHeader title="Decision Ledger" subtitle="AI decisions, rule validation results, and recovery outcomes."
         right={<div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -304,7 +322,7 @@ export default function App() {
       {attempts.length === 0 ? (
         <EmptyState icon="☰" title="No decisions recorded yet" description="The Decision Ledger populates after the Recovery Agent processes a batch. Each row shows the AI recommendation, which bounded action the RulesEngine approved, and the outcome." action="Run Batch ▶" onAction={handleRunBatch} />
       ) : (<>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 16 }}>
           <SummaryStat label="TOTAL DECISIONS" value={attempts.length} />
           <SummaryStat label="APPROVED" value={successCount} color="var(--green)" />
           <SummaryStat label="REJECTED" value={failCount} color="var(--red)" />
@@ -320,46 +338,48 @@ export default function App() {
   // ═══ 6. REPORTS ═══
   function renderReports() {
     const bySource = metrics?.bySource;
+    const chartsLoaded = funnelData && actionData.length > 0;
     return (<>
       <PageHeader title="Reports" subtitle="Recovery performance and financial insights across all revenue sources." />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 16 }}>
         <SummaryStat label="TOTAL RECOVERED" value={fmt(metrics?.revenueRecovered)} color="var(--green)" />
         <SummaryStat label="RECOVERY RATE" value={metrics ? pct(metrics.recoveryRatePercent) : '—'} color="var(--gold)" />
         <SummaryStat label="NET REVENUE" value={fmt(metrics?.netRecovered)} color="var(--gold-bright)" />
         <SummaryStat label="BASELINE" value={fmt(metrics?.baselineNetRecovered)} />
       </div>
-      <div className="card" style={{ marginBottom: 24, ...FW }}>
-        <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 14 }}>RECOVERY BY SOURCE</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
+      <div className="card" style={{ marginBottom: 16, ...FW }}>
+        <div className="section-title" style={{ marginBottom: 12 }}>RECOVERY BY SOURCE</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
           {bySource && Object.entries(bySource).map(([key, src]) => (<div key={key} style={{ padding: '18px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.04em', marginBottom: 10 }}>{src.label}</div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.04em', marginBottom: 10 }}>{src.label}</div>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 28, fontWeight: 700, color: 'var(--text)' }}>{src.atRisk} <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400 }}>at risk</span></div>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 600, color: 'var(--green)', marginTop: 6 }}>{src.recovered} <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400 }}>({src.atRisk > 0 ? ((src.recovered / src.atRisk) * 100).toFixed(1) : 0}%)</span></div>
           </div>))}
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 16, marginBottom: 24 }}>
-        {metrics && <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} />}
+      <div style={{ marginBottom: 16 }}>
+        {metrics ? <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} /> : <SkeletonCard lines={2} height={280} />}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
-        <div style={FW}><FunnelChart data={funnelData} /></div>
-        <div style={FW}><ActionBreakdownChart data={actionData} /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 16 }}>
+        {chartsLoaded ? <div style={FW}><FunnelChart data={funnelData} /></div> : <SkeletonCard height={320} />}
+        {chartsLoaded ? <div style={FW}><ActionBreakdownChart data={actionData} /></div> : <SkeletonCard height={320} />}
       </div>
     </>);
   }
 
   // ═══ 7. ALERTS ═══
   function renderAlerts() {
+    const criticalCount = alerts.filter(a => a.signoffReason?.includes('3rd')).length;
+    const warningCount = alerts.filter(a => a.signoffReason?.includes('discount')).length;
+    const infoCount = alerts.length - criticalCount - warningCount;
     return (<>
       <PageHeader title="Alerts" subtitle="Items requiring human review — escalated per the bounded-workflow rules." />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 16 }}>
+        <SummaryStat label="CRITICAL" value={criticalCount} color="var(--red)" />
+        <SummaryStat label="WARNING" value={warningCount} color="var(--amber)" />
+        <SummaryStat label="INFO" value={Math.max(0, infoCount)} />
+      </div>
       <PendingReview key={`alert-${funnelRefresh}`} forceShow />
-      {alerts.length === 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16, marginTop: 24 }}>
-          <SummaryStat label="CRITICAL" value="0" color="var(--red)" />
-          <SummaryStat label="WARNING" value="0" color="var(--amber)" />
-          <SummaryStat label="INFO" value="0" />
-        </div>
-      )}
     </>);
   }
 
@@ -367,28 +387,28 @@ export default function App() {
   function renderSettings() {
     return (<>
       <PageHeader title="Settings" subtitle="Manage application configuration and agent bounds." />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 20 }}>
         {/* Left: Configuration */}
         <div className="card" style={FW}>
-          <div style={{ fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 6 }}>AGENT CONFIGURATION</div>
-          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginBottom: 24 }}>These values control the RulesEngine's hard bounds. Changes take effect on the next batch run.</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 20 }}>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>AGENT CONFIGURATION</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>These values control the RulesEngine's hard bounds. Changes take effect on the next batch run.</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
             {[ { key: 'maxRetries', label: 'Max Retry Attempts', type: 'number' }, { key: 'maxDiscountPercent', label: 'Max Discount %', type: 'number' }, { key: 'retryCooldownMinutes', label: 'Cooldown (minutes)', type: 'number' }, { key: 'minAmountForDiscount', label: 'Min Amount for Discount (₹)', type: 'number' },
             ].map(f => (<div key={f.key}>
-              <label style={{ display: 'block', fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: 8 }}>{f.label}</label>
+              <label style={{ display: 'block', fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: 6 }}>{f.label}</label>
               <input type={f.type} value={settingsLocal[f.key] ?? ''} onChange={e => setSettingsLocal(p => ({ ...p, [f.key]: e.target.type === 'number' ? Number(e.target.value) : e.target.value }))}
                 style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text)', background: 'var(--bg-secondary)', transition: 'border-color var(--transition-fast)' }}
                 onFocus={e => e.target.style.borderColor = 'var(--gold)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
             </div>))}
           </div>
-          <button onClick={saveSettings} disabled={settingsSaving} style={{ marginTop: 24, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 28px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 14, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
+          <button onClick={saveSettings} disabled={settingsSaving} style={{ marginTop: 20, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 28px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 13, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
             onMouseEnter={e => e.currentTarget.style.background = 'var(--gold-bright)'} onMouseLeave={e => e.currentTarget.style.background = 'var(--gold)'}
           >{settingsSaving ? 'Saving…' : 'Save Configuration'}</button>
         </div>
-        {/* Right: System Status */}
-        <div>
-          <div className="card" style={{ marginBottom: 16, ...FW }}>
-            <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 16 }}>SYSTEM STATUS</div>
+        {/* Right: System Status + Batch History */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="card" style={FW}>
+            <div className="section-title">SYSTEM STATUS</div>
             {[
               { label: 'Rules Engine', value: 'Active', color: 'var(--green)', icon: '✓' },
               { label: 'AI Model', value: 'Model v2.1.4', color: 'var(--gold)', icon: '●' },
@@ -402,7 +422,7 @@ export default function App() {
             ))}
           </div>
           <div className="card" style={FW}>
-            <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 16 }}>BATCH HISTORY</div>
+            <div className="section-title">BATCH HISTORY</div>
             <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)' }}>Last batch: {lastUpdated ? lastUpdated.toLocaleString() : 'Never'}</div>
             <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Transactions seeded: {metrics?.totalAtRisk ?? '—'}</div>
             <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Recovery rate: {metrics ? pct(metrics.recoveryRatePercent) : '—'}</div>
@@ -460,15 +480,15 @@ export default function App() {
       </aside>
 
       <div style={{ width: 'calc(100vw - 240px)', marginLeft: 240, display: 'flex', flexDirection: 'column', minHeight: '100vh', minWidth: 0 }}>
-        <header style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '20px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+        <header style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '18px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
           <div>
-            <h1 style={{ fontFamily: 'var(--font-body)', fontSize: 24, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Revenue Recovery Agent</h1>
-            <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-muted)', marginTop: 2 }}>Razorpay AI Buildathon · Track 03 · AI Revenue Recovery</div>
+            <h1 style={{ fontFamily: 'var(--font-body)', fontSize: 22, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Revenue Recovery Agent</h1>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Razorpay AI Buildathon · Track 03 · AI Revenue Recovery</div>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
             {reviewCount > 0 && <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--amber)', background: 'var(--amber-bg)', border: '1px solid var(--amber-border)', borderRadius: 'var(--radius-full)', padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 10 }}>⚠</span> {reviewCount} PENDING REVIEW</span>}
             <button onClick={handleRunBatch} disabled={loading}
-              style={{ background: loading ? 'var(--text-muted)' : 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 22px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 14, cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, transition: 'all var(--transition-fast)', boxShadow: loading ? 'none' : 'var(--shadow-gold)' }}
+              style={{ background: loading ? 'var(--text-muted)' : 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 22px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 13, cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, transition: 'all var(--transition-fast)', boxShadow: loading ? 'none' : 'var(--shadow-gold)' }}
               onMouseEnter={e => { if (!loading) e.currentTarget.style.background = 'var(--gold-bright)'; }}
               onMouseLeave={e => { if (!loading) e.currentTarget.style.background = 'var(--gold)'; }}
             >{loading ? '⏳ Running…' : 'Run Batch'} {!loading && <span style={{ fontSize: 12 }}>▶</span>}</button>
@@ -491,9 +511,9 @@ export default function App() {
           {renderSection()}
         </main>
 
-        <footer style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)', padding: '14px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>RulesEngine.enforceBounds() — every action validated before execution</span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}><span style={{ color: 'var(--gold)' }}>●</span> LLM proposes · <span style={{ color: 'var(--red)' }}>●</span> Rules engine disposes</span>
+        <footer style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)', padding: '12px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>RulesEngine.enforceBounds() — every action validated before execution</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}><span style={{ color: 'var(--gold)' }}>●</span> LLM proposes · <span style={{ color: 'var(--red)' }}>●</span> Rules engine disposes</span>
         </footer>
       </div>
 
