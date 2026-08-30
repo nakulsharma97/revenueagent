@@ -1,10 +1,10 @@
 const RULES = [
-  { id: 'R1', rule: 'Max retry attempts per transaction', limit: '3', code: 'RulesEngine.eligibleActions(tx)' },
-  { id: 'R2', rule: 'Cooldown between retries', limit: '60 minutes', code: 'RecoveryOrchestratorService.processOne()' },
-  { id: 'R3', rule: 'Max discount the agent can offer', limit: '15%', code: 'RulesEngine.enforceBounds()' },
-  { id: 'R4', rule: 'Min transaction amount eligible for discount', limit: '₹500', code: 'RulesEngine.eligibleActions()' },
-  { id: 'R5', rule: 'Human sign-off: discount above ceiling', limit: 'REQUIRED', code: 'RulesEngine.requiresHumanSignoff()' },
-  { id: 'R6', rule: 'Human sign-off: 3rd consecutive failure', limit: 'REQUIRED', code: 'RulesEngine.requiresHumanSignoff()' },
+  { id: 'R1', rule: 'Max retries per transaction', limit: '3', code: 'RulesEngine.eligibleActions(tx)' },
+  { id: 'R2', rule: 'Cooldown between retries', limit: '60 min', code: 'RecoveryOrchestratorService.processOne()' },
+  { id: 'R3', rule: 'Max agent discount', limit: '15%', code: 'RulesEngine.enforceBounds()' },
+  { id: 'R4', rule: 'Min amount for discount', limit: '₹500', code: 'RulesEngine.eligibleActions()' },
+  { id: 'R5', rule: 'Sign-off: discount > ceiling', limit: 'REQUIRED', code: 'RulesEngine.requiresHumanSignoff()' },
+  { id: 'R6', rule: 'Sign-off: 3rd consecutive failure', limit: 'REQUIRED', code: 'RulesEngine.requiresHumanSignoff()' },
 ];
 
 export default function BoundsRegister({ expanded }) {
@@ -24,19 +24,19 @@ export default function BoundsRegister({ expanded }) {
         <table className="main-table">
           <thead>
             <tr>
-              <th style={{ width: 48 }}>REF</th>
-              <th style={{ whiteSpace: 'normal', wordBreak: 'normal' }}>RULE</th>
-              <th style={{ width: 120 }}>LIMIT</th>
-              <th>ENFORCED BY</th>
+              <th style={{ width: 44, whiteSpace: 'nowrap' }}>REF</th>
+              <th style={{ whiteSpace: 'nowrap' }}>RULE</th>
+              <th style={{ width: 100, whiteSpace: 'nowrap' }}>LIMIT</th>
+              <th style={{ whiteSpace: 'nowrap' }}>ENFORCED BY</th>
             </tr>
           </thead>
           <tbody>
             {RULES.map(r => (
               <tr key={r.id}>
-                <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: 12, color: r.limit === 'REQUIRED' ? 'var(--red)' : 'var(--gold)' }}>{r.id}</td>
-                <td style={{ color: 'var(--text-secondary)', whiteSpace: 'normal', wordBreak: 'normal' }}>{r.rule}</td>
-                <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: 12, color: r.limit === 'REQUIRED' ? 'var(--red)' : 'var(--gold-bright)' }}>{r.limit}</td>
-                <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{r.code}</td>
+                <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: 12, color: r.limit === 'REQUIRED' ? 'var(--red)' : 'var(--gold)', whiteSpace: 'nowrap' }}>{r.id}</td>
+                <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{r.rule}</td>
+                <td style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: 12, color: r.limit === 'REQUIRED' ? 'var(--red)' : 'var(--gold-bright)', whiteSpace: 'nowrap' }}>{r.limit}</td>
+                <td style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 11, whiteSpace: 'nowrap' }}>{r.code}</td>
               </tr>
             ))}
           </tbody>

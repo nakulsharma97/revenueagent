@@ -161,7 +161,7 @@ export default function App() {
       </div>
 
       {/* ROW 2: Net Revenue chart + Bounds Register */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14, marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14, marginBottom: 16, alignItems: 'start' }}>
         <div style={{ width: '100%', minWidth: 0 }}>{metrics && <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} />}</div>
         <div style={{ width: '100%', minWidth: 0 }}><BoundsRegister /></div>
       </div>
