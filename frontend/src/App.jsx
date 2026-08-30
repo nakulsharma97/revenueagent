@@ -9,6 +9,8 @@ import TransactionModal from './components/TransactionModal';
 import PendingReview from './components/PendingReview';
 import { fetchMetrics, runBatch, exportCsv } from './api';
 
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
+
 const NAV_ITEMS = [
   { id: 'overview', label: 'Overview', icon: '⌂' },
   { id: 'bounds', label: 'Bound Register', icon: '⚙' },
@@ -19,6 +21,48 @@ const NAV_ITEMS = [
   { id: 'alerts', label: 'Alerts', icon: '🔔' },
   { id: 'settings', label: 'Settings', icon: '⚙' },
 ];
+
+const FW = { width: '100%', minWidth: 0 };
+
+/* Reusable page header */
+function PageHeader({ title, subtitle, right }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 24, ...FW }}>
+      <div>
+        <h2 style={{ fontFamily: 'var(--font-body)', fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 }}>{title}</h2>
+        {subtitle && <p style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-muted)', marginTop: 4 }}>{subtitle}</p>}
+      </div>
+      {right && <div style={{ flexShrink: 0 }}>{right}</div>}
+    </div>
+  );
+}
+
+/* Reusable summary stat block */
+function SummaryStat({ label, value, color }) {
+  return (
+    <div style={{ flex: 1, minWidth: 0, padding: '16px 20px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+      <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 24, fontWeight: 700, color: color || 'var(--text)' }}>{value}</div>
+    </div>
+  );
+}
+
+/* Reusable empty state */
+function EmptyState({ icon, title, description, action, onAction }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 40px', ...FW }}>
+      <div style={{ fontSize: 48, marginBottom: 20, opacity: 0.15 }}>{icon}</div>
+      <div style={{ fontFamily: 'var(--font-body)', fontSize: 18, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>{title}</div>
+      <div style={{ fontFamily: 'var(--font-body)', fontSize: 14, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 480, lineHeight: 1.6, marginBottom: action ? 24 : 0 }}>{description}</div>
+      {action && (
+        <button onClick={onAction} style={{ background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 24px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 14, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
+          onMouseEnter={e => e.currentTarget.style.background = 'var(--gold-bright)'}
+          onMouseLeave={e => e.currentTarget.style.background = 'var(--gold)'}
+        >{action}</button>
+      )}
+    </div>
+  );
+}
 
 export default function App() {
   const [metrics, setMetrics] = useState(null);
@@ -32,493 +76,428 @@ export default function App() {
   const [reviewCount, setReviewCount] = useState(null);
   const [activeNav, setActiveNav] = useState('overview');
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [actionLog, setActionLog] = useState([]);
+  const [allTransactions, setAllTransactions] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [boundsConfig, setBoundsConfig] = useState(null);
+  const [settingsLocal, setSettingsLocal] = useState({});
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [funnelData, setFunnelData] = useState(null);
+  const [actionData, setActionData] = useState([]);
+
+  useEffect(() => { if (boundsConfig) setSettingsLocal(boundsConfig); }, [boundsConfig]);
+
+  async function saveSettings() {
+    setSettingsSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/config/bounds`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settingsLocal) });
+      if (res.ok) { const u = await res.json(); setBoundsConfig(u); setSettingsLocal(u); }
+    } finally { setSettingsSaving(false); }
+  }
 
   const loadMetrics = useCallback(async () => {
-    try {
-      const m = await fetchMetrics();
-      setMetrics(m);
-      setLastUpdated(new Date());
-      setError(null);
-    } catch (e) {
-      setError('Backend not reachable. Start the Spring Boot app on :8080, then reload.');
-    }
-  }, []);
-
-  const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
+    try { const m = await fetchMetrics(); setMetrics(m); setLastUpdated(new Date()); setError(null); setRetryCount(0); }
+    catch (e) { if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadMetrics(); }, 2000); else setError('Backend not reachable. Start the Spring Boot app on :8080, then reload.'); }
+  }, [retryCount]);
 
   const loadReviewCount = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/recovery/pending-review`);
-      if (res.ok) {
-        const data = await res.json();
-        setReviewCount(data.length);
-      }
-    } catch (e) { /* ignore */ }
-  }, [API_BASE]);
+    try { const res = await fetch(`${API_BASE}/api/recovery/pending-review`); if (res.ok) { const data = await res.json(); setReviewCount(data.length); setAlerts(data); } } catch (e) {}
+  }, []);
 
-  useEffect(() => { loadMetrics(); loadReviewCount(); }, [loadMetrics, loadReviewCount, funnelRefresh]);
+  const loadActionLog = useCallback(async () => {
+    try { const res = await fetch(`${API_BASE}/api/recovery/transactions`); if (res.ok) setAllTransactions(await res.json()); } catch (e) {}
+  }, []);
+
+  const loadBoundsConfig = useCallback(async () => {
+    try { const res = await fetch(`${API_BASE}/api/config/bounds`); if (res.ok) setBoundsConfig(await res.json()); } catch (e) {}
+  }, []);
+
+  const loadFunnelData = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/metrics/funnel`); if (res.ok) setFunnelData(await res.json()); } catch (e) {} }, []);
+  const loadActionData = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/metrics/actions`); if (res.ok) setActionData(await res.json()); } catch (e) {} }, []);
+
+  useEffect(() => { loadMetrics(); loadReviewCount(); loadActionLog(); loadBoundsConfig(); loadFunnelData(); loadActionData(); }, []);
+  useEffect(() => { if (funnelRefresh > 0) { loadReviewCount(); loadActionLog(); loadFunnelData(); loadActionData(); } }, [funnelRefresh]);
 
   async function handleRunBatch() {
-    setLoading(true);
-    setAttempts([]);
-    setStreamCount(null);
-    setBatchProgress({ processed: 0, total: metrics?.totalAtRisk || 300, recoveredAmount: 0, startTime: Date.now() });
+    setLoading(true); setAttempts([]); setStreamCount(null);
+    setBatchProgress({ processed: 0, total: metrics?.totalAtRisk || 320, recoveredAmount: 0, startTime: Date.now() });
     try {
-      const result = await runBatch();
-      const reversed = result.reverse();
-      setAttempts(reversed);
-      setStreamCount(result.length);
+      const result = await runBatch(); const reversed = result.reverse();
+      setAttempts(reversed); setStreamCount(result.length); setActionLog(result);
       const finalRecovered = reversed.filter(a => a.outcome === 'SUCCESS').reduce((sum, a) => sum + (a.amountRecovered || 0), 0);
       setBatchProgress(prev => prev ? { ...prev, processed: result.length, recoveredAmount: finalRecovered } : null);
-      await loadMetrics();
-      await loadReviewCount();
-      setFunnelRefresh((n) => n + 1);
-      setError(null);
-    } catch (e) {
-      if (e.message?.includes('409') || e.message?.includes('already')) {
-        setError('Batch already running — wait for the current batch to complete.');
-      } else {
-        setError('Batch run failed — check the backend logs.');
-      }
-    } finally {
-      setLoading(false);
-      setTimeout(() => setBatchProgress(null), 2000);
+      await loadMetrics(); await loadReviewCount(); await loadActionLog(); setFunnelRefresh(n => n + 1); setError(null);
+    } catch (e) { setError(e.message?.includes('409') ? 'Batch already running — wait for the current batch to complete.' : 'Batch run failed — check the backend logs.'); }
+    finally { setLoading(false); setTimeout(() => setBatchProgress(null), 2000); }
+  }
+
+  function fmt(v) { return v === null || v === undefined ? '—' : `₹${Number(v).toLocaleString('en-IN')}`; }
+  function pct(v) { return v === null || v === undefined ? '—' : `${Number(v).toFixed(1)}%`; }
+
+  // ═══ 1. OVERVIEW ═══
+  function renderOverview() {
+    const totalRecovered = metrics?.recoveredCount ?? 0;
+    const totalFailed = metrics ? metrics.totalAtRisk - metrics.recoveredCount : 0;
+    const pendingReview = alerts.length;
+    const successCount = attempts.filter(a => a.outcome === 'SUCCESS').length;
+    const failCount = attempts.filter(a => a.outcome === 'FAILED').length;
+    const skipCount = attempts.filter(a => a.outcome === 'PENDING').length;
+    return (<>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
+        <StatCard label="TRANSACTIONS AT RISK" value={metrics?.totalAtRisk ?? '—'} sub="Total flagged" icon="⚠" iconBg="rgba(216,155,50,0.12)" iconColor="var(--amber)" />
+        <StatCard label="RECOVERED" value={metrics?.recoveredCount ?? '—'} sub="Successful recoveries" icon="✓" iconBg="var(--green-bg)" iconColor="var(--green)" />
+        <StatCard label="RECOVERY RATE" value={metrics ? pct(metrics.recoveryRatePercent) : '—'} sub="Recovery success rate" icon="▮" iconBg="var(--gold-bg)" iconColor="var(--gold)" />
+        <StatCard label="NET REVENUE" value={metrics ? fmt(metrics.netRecovered) : '—'} sub={metrics ? `${fmt(metrics.revenueRecovered)} recovered · ${fmt(metrics.interventionCost)} cost` : ''} icon="₹" iconBg="var(--gold-bg)" iconColor="var(--gold-bright)" valueColor="var(--gold-bright)" />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 24 }}>
+        <div style={FW}>{metrics && <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} />}</div>
+        <div style={FW}><BoundsRegister /></div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 24 }}>
+        <div style={FW}><FunnelChart data={funnelData} /></div>
+        <div style={FW}><ActionBreakdownChart data={actionData} /></div>
+      </div>
+      <div className="card" style={{ marginBottom: 24, ...FW }}>
+        <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 16 }}>ALLOWED ACTIONS — LLM MAY ONLY PICK FROM THIS LIST</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+          {[ { action: 'Retry Now', desc: 'Immediate retry', icon: '↻', bg: 'var(--green-bg)' }, { action: 'Retry Scheduled', desc: 'After cooldown', icon: '⏱', bg: 'var(--gold-bg)' }, { action: 'Send Payment Link', desc: 'Update payment', icon: '🔗', bg: 'var(--amber-bg)' }, { action: 'Offer Discount', desc: 'Max 15%', icon: '%', bg: 'var(--gold-bg)' }, { action: 'Escalate to Human', desc: 'Collections team', icon: '👤', bg: 'var(--red-bg)' }, { action: 'Checkout Reminder', desc: 'Cart recovery', icon: '🛒', bg: 'var(--amber-bg)' }, { action: 'Send Reminder', desc: 'B2B invoice', icon: '📧', bg: 'var(--gold-bg)' }, { action: 'Offer Payment Plan', desc: 'Installments', icon: '📋', bg: 'var(--green-bg)' },
+          ].map(a => (<div key={a.action} style={{ padding: '14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12, background: 'var(--surface)' }}><div style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: a.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>{a.icon}</div><div><div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{a.action}</div><div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)' }}>{a.desc}</div></div></div>))}
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16, marginBottom: 24 }}>
+        <div style={FW}><PendingReview key={funnelRefresh} /></div>
+        {metrics?.bySource && (<div className="card" style={FW}>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 14 }}>REVENUE BY SOURCE</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            {Object.entries(metrics.bySource).map(([key, src]) => (<div key={key} style={{ padding: '14px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}><div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.04em', marginBottom: 8 }}>{src.label}</div><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700, color: 'var(--text)' }}>{src.atRisk}</span><span style={{ fontSize: 12, color: 'var(--text-muted)' }}>at risk</span></div><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 4 }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 600, color: 'var(--green)' }}>{src.recovered}</span><span style={{ fontSize: 12, color: 'var(--text-muted)' }}>recovered</span></div></div>))}
+          </div>
+        </div>)}
+      </div>
+    </>);
+  }
+
+  // ═══ 2. BOUND REGISTER ═══
+  function renderBoundRegister() {
+    return (<>
+      <PageHeader title="Bound Register" subtitle="Non-negotiable constraints enforced by the RulesEngine before any LLM output executes." />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 16, marginBottom: 24 }}><BoundsRegister expanded /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16 }}>
+        <SummaryStat label="MAX RETRIES" value={boundsConfig?.maxRetries ?? 3} color="var(--gold)" />
+        <SummaryStat label="MAX DISCOUNT" value={`${boundsConfig?.maxDiscountPercent ?? 15}%`} color="var(--gold-bright)" />
+        <SummaryStat label="COOLDOWN" value={`${boundsConfig?.retryCooldownMinutes ?? 60} min`} color="var(--amber)" />
+      </div>
+    </>);
+  }
+
+  // ═══ 3. TRANSACTIONS ═══
+  function renderTransactions() {
+    const txCount = allTransactions.length;
+    const recovered = allTransactions.filter(t => t.status === 'RECOVERED').length;
+    const atRisk = allTransactions.filter(t => t.status === 'AT_RISK').length;
+    const inRecovery = allTransactions.filter(t => t.status === 'IN_RECOVERY').length;
+    const lost = allTransactions.filter(t => t.status === 'LOST').length;
+    return (<>
+      <PageHeader title="Transactions" subtitle="Monitor all transactions at risk and their recovery progress." />
+      {txCount === 0 ? (
+        <EmptyState icon="⇄" title="No transactions loaded" description="Run a recovery batch to populate the transaction ledger with payment failures, checkout abandonments, and receivables." action="Run Batch ▶" onAction={handleRunBatch} />
+      ) : (<>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 24 }}>
+          <SummaryStat label="TOTAL" value={txCount} color="var(--text)" />
+          <SummaryStat label="RECOVERED" value={recovered} color="var(--green)" />
+          <SummaryStat label="IN RECOVERY" value={inRecovery} color="var(--gold)" />
+          <SummaryStat label="LOST" value={lost} color="var(--red)" />
+        </div>
+        <div className="card" style={FW}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead><tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left' }}>
+                {['ID', 'Amount', 'Failure Reason', 'Retries', 'Status', 'Created'].map(h => (
+                  <th key={h} style={{ padding: '10px 14px', fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>{allTransactions.slice(0, 200).map(tx => (
+                <tr key={tx.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', color: 'var(--gold)', fontWeight: 600 }}>#{tx.id}</td>
+                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text)' }}>{fmt(tx.amount)}</td>
+                  <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', textTransform: 'capitalize' }}>{tx.failureReason?.replaceAll('_', ' ').toLowerCase()}</td>
+                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', textAlign: 'center', color: 'var(--text-secondary)' }}>{tx.retryCount}</td>
+                  <td style={{ padding: '10px 14px' }}>
+                    <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 'var(--radius-full)', background: tx.status === 'RECOVERED' ? 'var(--green-bg)' : tx.status === 'LOST' ? 'var(--red-bg)' : tx.status === 'IN_RECOVERY' ? 'var(--gold-bg)' : 'var(--amber-bg)', color: tx.status === 'RECOVERED' ? 'var(--green)' : tx.status === 'LOST' ? 'var(--red)' : tx.status === 'IN_RECOVERY' ? 'var(--gold)' : 'var(--amber)', fontWeight: 600, fontSize: 11 }}>{tx.status?.replaceAll('_', ' ')}</span>
+                  </td>
+                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>{tx.createdAt ? new Date(tx.createdAt).toLocaleDateString() : '—'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          {allTransactions.length > 200 && <div style={{ padding: '10px 14px', textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', borderTop: '1px solid var(--border)' }}>Showing 200 of {allTransactions.length}</div>}
+        </div>
+      </>)}
+    </>);
+  }
+
+  // ═══ 4. ACTIONS ═══
+  function renderActions() {
+    const sorted = [...(actionLog.length > 0 ? actionLog : attempts)].sort((a, b) => b.id - a.id);
+    const successCount = sorted.filter(a => a.outcome === 'SUCCESS').length;
+    const failCount = sorted.filter(a => a.outcome === 'FAILED').length;
+    const skipCount = sorted.filter(a => a.outcome === 'PENDING').length;
+    const totalCost = sorted.reduce((s, a) => s + (a.interventionCost || 0), 0);
+    const totalRecovered = sorted.filter(a => a.outcome === 'SUCCESS').reduce((s, a) => s + (a.amountRecovered || 0), 0);
+    return (<>
+      <PageHeader title="Actions" subtitle="Every intervention executed by the recovery agent across all sources." right={sorted.length > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>{sorted.length} total actions</span>} />
+      {sorted.length === 0 ? (
+        <EmptyState icon="⚡" title="No actions executed yet" description="Run a recovery batch to see agent decisions, actions taken, outcomes, and recovery details across payment failures, checkout abandonments, and receivables." action="Run Batch ▶" onAction={handleRunBatch} />
+      ) : (<>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 16, marginBottom: 24 }}>
+          <SummaryStat label="TOTAL ACTIONS" value={sorted.length} />
+          <SummaryStat label="SUCCEEDED" value={successCount} color="var(--green)" />
+          <SummaryStat label="FAILED" value={failCount} color="var(--red)" />
+          <SummaryStat label="REVENUE RECOVERED" value={fmt(totalRecovered)} color="var(--green)" />
+          <SummaryStat label="INTERVENTION COST" value={fmt(totalCost)} color="var(--amber)" />
+        </div>
+        <div className="card" style={FW}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead><tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left' }}>
+                {['TXN', 'SOURCE', 'ACTION', 'OUTCOME', 'AMOUNT', 'COST', 'REASONING', 'TIME'].map(h => (
+                  <th key={h} style={{ padding: '10px 14px', fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>{sorted.slice(0, 300).map(a => (
+                <tr key={a.id} style={{ borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer' }} onClick={() => setSelectedAttempt(a)}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-hover)'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', color: 'var(--gold)', fontWeight: 600 }}>#{a.transaction?.id || a.checkoutSession?.id || a.receivable?.id}</td>
+                  <td style={{ padding: '10px 14px' }}><span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: a.sourceType === 'PAYMENT' ? 'var(--gold-bg)' : a.sourceType === 'CHECKOUT' ? 'var(--amber-bg)' : 'var(--green-bg)', color: a.sourceType === 'PAYMENT' ? 'var(--gold)' : a.sourceType === 'CHECKOUT' ? 'var(--amber)' : 'var(--green)', fontWeight: 600, fontSize: 10, whiteSpace: 'nowrap' }}>{a.sourceType}</span></td>
+                  <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{a.actionTaken?.replaceAll('_', ' ')}</td>
+                  <td style={{ padding: '10px 14px' }}><span style={{ padding: '3px 10px', borderRadius: 'var(--radius-full)', background: a.outcome === 'SUCCESS' ? 'var(--green-bg)' : a.outcome === 'FAILED' ? 'var(--red-bg)' : 'var(--amber-bg)', color: a.outcome === 'SUCCESS' ? 'var(--green)' : a.outcome === 'FAILED' ? 'var(--red)' : 'var(--amber)', fontWeight: 600, fontSize: 11 }}>{a.outcome}</span></td>
+                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', textAlign: 'right', color: a.amountRecovered > 0 ? 'var(--green)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.amountRecovered > 0 ? fmt(a.amountRecovered) : '—'}</td>
+                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.interventionCost > 0 ? fmt(a.interventionCost) : '—'}</td>
+                  <td style={{ padding: '10px 14px', color: 'var(--text-muted)', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.reasoning}</td>
+                  <td style={{ padding: '10px 14px', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.executedAt ? new Date(a.executedAt).toLocaleTimeString() : '—'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          {sorted.length > 300 && <div style={{ padding: '10px 14px', textAlign: 'center', fontSize: 12, color: 'var(--text-muted)', borderTop: '1px solid var(--border)' }}>Showing 300 of {sorted.length}</div>}
+        </div>
+      </>)}
+    </>);
+  }
+
+  // ═══ 5. DECISION LEDGER ═══
+  function renderDecisionLedger() {
+    const successCount = attempts.filter(a => a.outcome === 'SUCCESS').length;
+    const failCount = attempts.filter(a => a.outcome === 'FAILED').length;
+    const signoffCount = attempts.filter(a => a.requiresHumanSignoff).length;
+    const llmCount = attempts.filter(a => a.llmDriven).length;
+    return (<>
+      <PageHeader title="Decision Ledger" subtitle="AI decisions, rule validation results, and recovery outcomes."
+        right={<div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {streamCount !== null && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-full)', padding: '4px 12px', border: '1px solid var(--border)' }}>{streamCount} entries</span>}
+          <button onClick={exportCsv} style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '7px 14px', fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 500, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, transition: 'all var(--transition-fast)' }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--gold)'; e.currentTarget.style.color = 'var(--gold)'; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+          >↓ Export CSV</button>
+        </div>}
+      />
+      {attempts.length === 0 ? (
+        <EmptyState icon="☰" title="No decisions recorded yet" description="The Decision Ledger populates after the Recovery Agent processes a batch. Each row shows the AI recommendation, which bounded action the RulesEngine approved, and the outcome." action="Run Batch ▶" onAction={handleRunBatch} />
+      ) : (<>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 24 }}>
+          <SummaryStat label="TOTAL DECISIONS" value={attempts.length} />
+          <SummaryStat label="APPROVED" value={successCount} color="var(--green)" />
+          <SummaryStat label="REJECTED" value={failCount} color="var(--red)" />
+          <SummaryStat label="PENDING REVIEW" value={signoffCount} color="var(--amber)" />
+        </div>
+        <div className="card" style={FW}>
+          <AttemptTable attempts={attempts} onSelectAttempt={setSelectedAttempt} />
+        </div>
+      </>)}
+    </>);
+  }
+
+  // ═══ 6. REPORTS ═══
+  function renderReports() {
+    const bySource = metrics?.bySource;
+    return (<>
+      <PageHeader title="Reports" subtitle="Recovery performance and financial insights across all revenue sources." />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
+        <SummaryStat label="TOTAL RECOVERED" value={fmt(metrics?.revenueRecovered)} color="var(--green)" />
+        <SummaryStat label="RECOVERY RATE" value={metrics ? pct(metrics.recoveryRatePercent) : '—'} color="var(--gold)" />
+        <SummaryStat label="NET REVENUE" value={fmt(metrics?.netRecovered)} color="var(--gold-bright)" />
+        <SummaryStat label="BASELINE" value={fmt(metrics?.baselineNetRecovered)} />
+      </div>
+      <div className="card" style={{ marginBottom: 24, ...FW }}>
+        <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 14 }}>RECOVERY BY SOURCE</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
+          {bySource && Object.entries(bySource).map(([key, src]) => (<div key={key} style={{ padding: '18px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.04em', marginBottom: 10 }}>{src.label}</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 28, fontWeight: 700, color: 'var(--text)' }}>{src.atRisk} <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400 }}>at risk</span></div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 600, color: 'var(--green)', marginTop: 6 }}>{src.recovered} <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 400 }}>({src.atRisk > 0 ? ((src.recovered / src.atRisk) * 100).toFixed(1) : 0}%)</span></div>
+          </div>))}
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 16, marginBottom: 24 }}>
+        {metrics && <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} />}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+        <div style={FW}><FunnelChart data={funnelData} /></div>
+        <div style={FW}><ActionBreakdownChart data={actionData} /></div>
+      </div>
+    </>);
+  }
+
+  // ═══ 7. ALERTS ═══
+  function renderAlerts() {
+    return (<>
+      <PageHeader title="Alerts" subtitle="Items requiring human review — escalated per the bounded-workflow rules." />
+      <PendingReview key={`alert-${funnelRefresh}`} forceShow />
+      {alerts.length === 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 16, marginTop: 24 }}>
+          <SummaryStat label="CRITICAL" value="0" color="var(--red)" />
+          <SummaryStat label="WARNING" value="0" color="var(--amber)" />
+          <SummaryStat label="INFO" value="0" />
+        </div>
+      )}
+    </>);
+  }
+
+  // ═══ 8. SETTINGS ═══
+  function renderSettings() {
+    return (<>
+      <PageHeader title="Settings" subtitle="Manage application configuration and agent bounds." />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 24 }}>
+        {/* Left: Configuration */}
+        <div className="card" style={FW}>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 6 }}>AGENT CONFIGURATION</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginBottom: 24 }}>These values control the RulesEngine's hard bounds. Changes take effect on the next batch run.</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 20 }}>
+            {[ { key: 'maxRetries', label: 'Max Retry Attempts', type: 'number' }, { key: 'maxDiscountPercent', label: 'Max Discount %', type: 'number' }, { key: 'retryCooldownMinutes', label: 'Cooldown (minutes)', type: 'number' }, { key: 'minAmountForDiscount', label: 'Min Amount for Discount (₹)', type: 'number' },
+            ].map(f => (<div key={f.key}>
+              <label style={{ display: 'block', fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: 8 }}>{f.label}</label>
+              <input type={f.type} value={settingsLocal[f.key] ?? ''} onChange={e => setSettingsLocal(p => ({ ...p, [f.key]: e.target.type === 'number' ? Number(e.target.value) : e.target.value }))}
+                style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text)', background: 'var(--bg-secondary)', transition: 'border-color var(--transition-fast)' }}
+                onFocus={e => e.target.style.borderColor = 'var(--gold)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
+            </div>))}
+          </div>
+          <button onClick={saveSettings} disabled={settingsSaving} style={{ marginTop: 24, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 28px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 14, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--gold-bright)'} onMouseLeave={e => e.currentTarget.style.background = 'var(--gold)'}
+          >{settingsSaving ? 'Saving…' : 'Save Configuration'}</button>
+        </div>
+        {/* Right: System Status */}
+        <div>
+          <div className="card" style={{ marginBottom: 16, ...FW }}>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 16 }}>SYSTEM STATUS</div>
+            {[
+              { label: 'Rules Engine', value: 'Active', color: 'var(--green)', icon: '✓' },
+              { label: 'AI Model', value: 'Model v2.1.4', color: 'var(--gold)', icon: '●' },
+              { label: 'API Connection', value: 'Connected', color: 'var(--green)', icon: '✓' },
+              { label: 'Data Store', value: 'H2 In-Memory', color: 'var(--text-secondary)', icon: '●' },
+            ].map(s => (
+              <div key={s.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-secondary)' }}>{s.label}</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)', fontSize: 12, color: s.color }}><span style={{ fontSize: 8 }}>{s.icon}</span>{s.value}</span>
+              </div>
+            ))}
+          </div>
+          <div className="card" style={FW}>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 16 }}>BATCH HISTORY</div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)' }}>Last batch: {lastUpdated ? lastUpdated.toLocaleString() : 'Never'}</div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Transactions seeded: {metrics?.totalAtRisk ?? '—'}</div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Recovery rate: {metrics ? pct(metrics.recoveryRatePercent) : '—'}</div>
+          </div>
+        </div>
+      </div>
+    </>);
+  }
+
+  function renderSection() {
+    switch (activeNav) {
+      case 'overview': return renderOverview();
+      case 'bounds': return renderBoundRegister();
+      case 'transactions': return renderTransactions();
+      case 'actions': return renderActions();
+      case 'ledger': return renderDecisionLedger();
+      case 'reports': return renderReports();
+      case 'alerts': return renderAlerts();
+      case 'settings': return renderSettings();
+      default: return renderOverview();
     }
   }
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
-
-      {/* ══════ SIDEBAR ══════ */}
-      <aside style={{
-        width: 240,
-        background: 'var(--sidebar-bg)',
-        display: 'flex',
-        flexDirection: 'column',
-        flexShrink: 0,
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        bottom: 0,
-        zIndex: 100,
-      }}>
-        {/* Logo */}
-        <div style={{
-          padding: '24px 20px',
-          borderBottom: '1px solid rgba(255,255,255,0.08)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-        }}>
-          <div style={{
-            width: 36,
-            height: 36,
-            borderRadius: 'var(--radius-sm)',
-            background: 'var(--green)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'white',
-            fontWeight: 700,
-            fontSize: 16,
-            fontFamily: 'var(--font-display)',
-          }}>
-            ₹
-          </div>
+      <aside style={{ width: 240, background: 'var(--sidebar-bg)', display: 'flex', flexDirection: 'column', flexShrink: 0, position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 100, borderRight: '1px solid var(--border-subtle)' }}>
+        <div style={{ padding: '24px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: 'var(--gold-bg)', border: '1px solid var(--gold-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gold)', fontWeight: 700, fontSize: 16 }}>₹</div>
           <div>
-            <div style={{
-              fontFamily: 'var(--font-display)',
-              fontWeight: 700,
-              fontSize: 15,
-              color: '#FFFFFF',
-              lineHeight: 1.2,
-            }}>
-              Recovery Ledger
-            </div>
-            <div style={{
-              fontFamily: 'var(--font-body)',
-              fontSize: 11,
-              color: 'var(--sidebar-text)',
-            }}>
-              Batch Operations
-            </div>
+            <div style={{ fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 15, color: 'var(--text)', lineHeight: 1.2 }}>Recovery Ledger</div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--sidebar-text)' }}>Batch Operations</div>
           </div>
         </div>
-
-        {/* Nav */}
-        <nav style={{ flex: 1, padding: '12px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => setActiveNav(item.id)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '10px 12px',
-                borderRadius: 'var(--radius-sm)',
-                border: 'none',
-                background: activeNav === item.id ? 'var(--sidebar-active-bg)' : 'transparent',
-                color: activeNav === item.id ? 'var(--sidebar-active)' : 'var(--sidebar-text)',
-                fontFamily: 'var(--font-body)',
-                fontSize: 13,
-                fontWeight: activeNav === item.id ? 600 : 400,
-                cursor: 'pointer',
-                textAlign: 'left',
-                width: '100%',
-                transition: 'all var(--transition-fast)',
-              }}
-              onMouseEnter={(e) => {
-                if (activeNav !== item.id) {
-                  e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
-                  e.currentTarget.style.color = '#FFFFFF';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (activeNav !== item.id) {
-                  e.currentTarget.style.background = 'transparent';
-                  e.currentTarget.style.color = 'var(--sidebar-text)';
-                }
-              }}
-            >
-              <span style={{ fontSize: 16, width: 20, textAlign: 'center' }}>{item.icon}</span>
+        <nav style={{ flex: 1, padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {NAV_ITEMS.map(item => (
+            <button key={item.id} onClick={() => setActiveNav(item.id)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 'var(--radius-sm)', border: 'none', background: activeNav === item.id ? 'var(--sidebar-active-bg)' : 'transparent', color: activeNav === item.id ? 'var(--sidebar-active)' : 'var(--sidebar-text)', fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: activeNav === item.id ? 600 : 400, cursor: 'pointer', textAlign: 'left', width: '100%', transition: 'all var(--transition-fast)' }}
+              onMouseEnter={e => { if (activeNav !== item.id) { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.color = 'var(--text-secondary)'; } }}
+              onMouseLeave={e => { if (activeNav !== item.id) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--sidebar-text)'; } }}>
+              <span style={{ fontSize: 15, width: 20, textAlign: 'center' }}>{item.icon}</span>
               {item.label}
+              {item.id === 'alerts' && alerts.length > 0 && <span style={{ marginLeft: 'auto', background: 'var(--red)', color: 'white', borderRadius: 'var(--radius-full)', padding: '1px 7px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>{alerts.length}</span>}
             </button>
           ))}
         </nav>
-
-        {/* AI Model Status */}
-        <div style={{
-          padding: '16px 20px',
-          borderTop: '1px solid rgba(255,255,255,0.08)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}>
+        <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--sidebar-text)' }}>AI Model Status</div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--sidebar-text)', opacity: 0.6 }}>Model v2.1.4</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)', opacity: 0.6 }}>Model v2.1.4</div>
           </div>
-          <span style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            fontFamily: 'var(--font-body)',
-            fontSize: 11,
-            fontWeight: 600,
-            color: 'var(--green)',
-          }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} />
-            Active
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, color: 'var(--green)' }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} /> Active
           </span>
         </div>
       </aside>
 
-      {/* ══════ MAIN CONTENT ══════ */}
-      <div style={{ flex: 1, marginLeft: 240, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-
-        {/* ── Top Header ── */}
-        <header style={{
-          background: 'var(--surface)',
-          borderBottom: '1px solid var(--border)',
-          padding: '20px 32px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}>
+      <div style={{ width: 'calc(100vw - 240px)', marginLeft: 240, display: 'flex', flexDirection: 'column', minHeight: '100vh', minWidth: 0 }}>
+        <header style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '20px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
           <div>
-            <h1 style={{
-              fontFamily: 'var(--font-display)',
-              fontSize: 24,
-              fontWeight: 700,
-              color: 'var(--text)',
-              lineHeight: 1.2,
-            }}>
-              Revenue Recovery Agent
-            </h1>
-            <div style={{
-              fontFamily: 'var(--font-body)',
-              fontSize: 13,
-              color: 'var(--text-muted)',
-              marginTop: 2,
-            }}>
-              Razorpay AI Buildathon · Track 03 · AI Revenue Recovery
-            </div>
+            <h1 style={{ fontFamily: 'var(--font-body)', fontSize: 24, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Revenue Recovery Agent</h1>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-muted)', marginTop: 2 }}>Razorpay AI Buildathon · Track 03 · AI Revenue Recovery</div>
           </div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-            {reviewCount > 0 && (
-              <span style={{
-                fontFamily: 'var(--font-body)',
-                fontSize: 12,
-                fontWeight: 600,
-                color: 'var(--ink-amber)',
-                background: 'var(--amber-bg)',
-                border: '1px solid #FDBA74',
-                borderRadius: 'var(--radius-full)',
-                padding: '6px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}>
-                <span style={{ fontSize: 10 }}>⚠</span>
-                {reviewCount} PENDING REVIEW
-              </span>
-            )}
-            <button
-              onClick={handleRunBatch}
-              disabled={loading}
-              style={{
-                background: loading ? 'var(--text-muted)' : 'var(--green)',
-                color: 'white',
-                border: 'none',
-                borderRadius: 'var(--radius-sm)',
-                padding: '10px 20px',
-                fontFamily: 'var(--font-display)',
-                fontWeight: 600,
-                fontSize: 14,
-                cursor: loading ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                transition: 'all var(--transition-fast)',
-                boxShadow: loading ? 'none' : '0 2px 8px rgba(34, 197, 94, 0.3)',
-              }}
-              onMouseEnter={(e) => { if (!loading) e.currentTarget.style.background = 'var(--green-dark)'; }}
-              onMouseLeave={(e) => { if (!loading) e.currentTarget.style.background = 'var(--green)'; }}
-            >
-              {loading ? '⏳ Running…' : 'Run Batch'}
-              {!loading && <span style={{ fontSize: 12 }}>▶</span>}
-            </button>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
+            {reviewCount > 0 && <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--amber)', background: 'var(--amber-bg)', border: '1px solid var(--amber-border)', borderRadius: 'var(--radius-full)', padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 10 }}>⚠</span> {reviewCount} PENDING REVIEW</span>}
+            <button onClick={handleRunBatch} disabled={loading}
+              style={{ background: loading ? 'var(--text-muted)' : 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 22px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 14, cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, transition: 'all var(--transition-fast)', boxShadow: loading ? 'none' : 'var(--shadow-gold)' }}
+              onMouseEnter={e => { if (!loading) e.currentTarget.style.background = 'var(--gold-bright)'; }}
+              onMouseLeave={e => { if (!loading) e.currentTarget.style.background = 'var(--gold)'; }}
+            >{loading ? '⏳ Running…' : 'Run Batch'} {!loading && <span style={{ fontSize: 12 }}>▶</span>}</button>
           </div>
         </header>
 
-        {/* ── Status Bar ── */}
-        <div style={{
-          background: 'var(--surface)',
-          borderBottom: '1px solid var(--border)',
-          padding: '10px 32px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          fontSize: 13,
-        }}>
+        <div style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)', padding: '10px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: attempts.length > 0 ? 'var(--green)' : 'var(--text-muted)' }} />
-            <span style={{ color: 'var(--text-secondary)' }}>
-              {attempts.length > 0
-                ? `${streamCount || attempts.length} transactions processed`
-                : 'Awaiting batch run — data will appear here'}
-            </span>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: attempts.length > 0 ? 'var(--green)' : metrics ? 'var(--gold)' : 'var(--text-muted)' }} />
+            <span style={{ color: 'var(--text-secondary)' }}>{attempts.length > 0 ? `${streamCount || attempts.length} transactions processed` : metrics ? `Loaded ${metrics.totalAtRisk} items — ready to process` : 'Connecting to backend…'}</span>
           </div>
-          {lastUpdated && (
-            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-              Last updated: {lastUpdated.toLocaleTimeString()} · 🔄
-            </span>
-          )}
+          {lastUpdated && <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Last updated: {lastUpdated.toLocaleTimeString()} · 🔄</span>}
         </div>
 
-        {/* ── Scrollable Content ── */}
-        <main style={{ padding: '24px 32px', flex: 1, overflowY: 'auto', minWidth: 0 }}>
-
-          {/* Error Banner */}
-          {error && (
-            <div className="animate-in" style={{
-              background: 'var(--red-bg)',
-              border: '1px solid var(--ink-red)',
-              borderRadius: 'var(--radius-sm)',
-              color: 'var(--ink-red)',
-              padding: '12px 16px',
-              fontSize: 13,
-              fontWeight: 500,
-              marginBottom: 16,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}>
-              <span>✕</span> {error}
-            </div>
-          )}
-
-          {/* ══ SECTION 1: STAT CARDS ══ */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 24 }}>
-            <StatCard
-              label="TRANSACTIONS AT RISK"
-              value={metrics?.totalAtRisk ?? '—'}
-              sub="Total flagged"
-              icon="⚠"
-              iconBg="#FEF3C7"
-              iconColor="#F59E0B"
-            />
-            <StatCard
-              label="RECOVERED"
-              value={metrics?.recoveredCount ?? '—'}
-              sub="Successful recoveries"
-              icon="↻"
-              iconBg={metrics?.recoveredCount > 0 ? 'var(--green-bg)' : '#F1F5F9'}
-              iconColor={metrics?.recoveredCount > 0 ? 'var(--green)' : 'var(--text-muted)'}
-            />
-            <StatCard
-              label="RECOVERY RATE"
-              value={metrics ? `${metrics.recoveryRatePercent}%` : '—'}
-              sub="Recovery success rate"
-              icon="▮"
-              iconBg="var(--blue-bg)"
-              iconColor="var(--ink-blue)"
-            />
-            <StatCard
-              label="NET REVENUE"
-              value={metrics ? `₹${Number(metrics.netRecovered).toLocaleString('en-IN')}` : '—'}
-              sub={metrics ? `₹${Number(metrics.revenueRecovered).toLocaleString('en-IN')} recovered · ₹${Number(metrics.interventionCost).toFixed(0)} cost` : ''}
-              icon="₹"
-              iconBg="var(--green-bg)"
-              iconColor="var(--green)"
-              valueColor="var(--green)"
-            />
-          </div>
-
-          {/* ══ SECTION 2: CHARTS ROW ══ */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
-            {/* Net Recovered vs Baseline */}
-            {metrics && <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} />}
-
-            {/* Bounds Register */}
-            <BoundsRegister />
-          </div>
-
-          {/* ══ SECTION 3: FUNNEL + ACTION ══ */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
-            <FunnelChart key={funnelRefresh} />
-            <ActionBreakdownChart key={funnelRefresh} />
-          </div>
-
-          {/* ══ SECTION 4: ALLOWED ACTIONS ══ */}
-          <div className="card" style={{ marginBottom: 24 }}>
-            <div style={{
-              fontFamily: 'var(--font-display)',
-              fontSize: 13,
-              fontWeight: 700,
-              letterSpacing: '0.04em',
-              textTransform: 'uppercase',
-              color: 'var(--text)',
-              marginBottom: 16,
-            }}>
-              ALLOWED ACTIONS — LLM MAY ONLY PICK FROM THIS LIST
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
-              {[
-                { action: 'Retry Now', desc: 'Immediate retry', color: 'var(--green)', bg: 'var(--green-bg)', icon: '↻' },
-                { action: 'Retry Scheduled', desc: 'After cooldown', color: 'var(--ink-blue)', bg: 'var(--blue-bg)', icon: '⏱' },
-                { action: 'Send Payment Link', desc: 'Update payment', color: 'var(--ink-amber)', bg: 'var(--amber-bg)', icon: '🔗' },
-                { action: 'Offer Discount', desc: 'Max 15%', color: 'var(--ink-purple)', bg: '#F5F3FF', icon: '%' },
-                { action: 'Escalate to Human', desc: 'Collections team', color: 'var(--ink-red)', bg: 'var(--red-bg)', icon: '👤' },
-              ].map((a) => (
-                <div key={a.action} style={{
-                  padding: '14px',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                }}>
-                  <div style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 'var(--radius-sm)',
-                    background: a.bg,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 16,
-                    flexShrink: 0,
-                  }}>
-                    {a.icon}
-                  </div>
-                  <div>
-                    <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{a.action}</div>
-                    <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)' }}>{a.desc}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* ══ SECTION 5: PENDING HUMAN REVIEW ══ */}
-          <PendingReview key={funnelRefresh} />
-
-          {/* ══ SECTION 6: DECISION LEDGER ══ */}
-          <div className="card" style={{ marginTop: 24 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{
-                  fontFamily: 'var(--font-display)',
-                  fontSize: 15,
-                  fontWeight: 700,
-                  color: 'var(--text)',
-                }}>
-                  Decision Ledger
-                </span>
-                {streamCount !== null && (
-                  <span style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 11,
-                    color: 'var(--text-muted)',
-                    background: 'var(--surface-2)',
-                    borderRadius: 'var(--radius-full)',
-                    padding: '3px 10px',
-                  }}>
-                    {streamCount} entries
-                  </span>
-                )}
-              </div>
-              <button
-                onClick={exportCsv}
-                style={{
-                  background: 'transparent',
-                  color: 'var(--text-secondary)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '7px 14px',
-                  fontFamily: 'var(--font-body)',
-                  fontSize: 12,
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  transition: 'all var(--transition-fast)',
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--green)'; e.currentTarget.style.color = 'var(--green)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
-              >
-                ↓ Export CSV
-              </button>
-            </div>
-            <AttemptTable attempts={attempts} onSelectAttempt={setSelectedAttempt} />
-          </div>
+        <main style={{ padding: '24px 28px', flex: 1, minWidth: 0, width: '100%' }}>
+          {error && (<div className="animate-in" style={{ background: 'var(--red-bg)', border: '1px solid var(--red-border)', borderRadius: 'var(--radius-sm)', color: 'var(--red)', padding: '12px 16px', fontSize: 13, fontWeight: 500, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>✕</span> {error}
+            <button onClick={() => setError(null)} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: 'var(--red)', cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>✕</button>
+          </div>)}
+          {renderSection()}
         </main>
 
-        {/* ── Footer ── */}
-        <footer style={{
-          borderTop: '1px solid var(--border)',
-          background: 'var(--surface)',
-          padding: '14px 32px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
-            RulesEngine.enforceBounds() — every action validated before execution
-          </span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>
-            <span style={{ color: 'var(--green)' }}>●</span> LLM proposes · <span style={{ color: 'var(--ink-red)' }}>●</span> Rules engine disposes
-          </span>
+        <footer style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)', padding: '14px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>RulesEngine.enforceBounds() — every action validated before execution</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}><span style={{ color: 'var(--gold)' }}>●</span> LLM proposes · <span style={{ color: 'var(--red)' }}>●</span> Rules engine disposes</span>
         </footer>
       </div>
 
-      {/* ── Transaction Detail Modal ── */}
-      {selectedAttempt && (
-        <TransactionModal attempt={selectedAttempt} onClose={() => setSelectedAttempt(null)} />
-      )}
+      {selectedAttempt && <TransactionModal attempt={selectedAttempt} onClose={() => setSelectedAttempt(null)} />}
     </div>
   );
 }

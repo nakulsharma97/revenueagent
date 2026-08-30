@@ -1,6 +1,6 @@
 package com.razorpay.recovery.scheduler;
 
-import com.razorpay.recovery.service.RecoveryOrchestratorService;
+import com.razorpay.recovery.recovery.RecoveryOrchestratorService;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 

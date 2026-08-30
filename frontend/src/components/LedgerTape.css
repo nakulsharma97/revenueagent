@@ -2,7 +2,7 @@
   overflow: hidden;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--bg-secondary);
   padding: 10px 0;
   position: relative;
 }
@@ -20,12 +20,12 @@
 
 .ledger-tape::before {
   left: 0;
-  background: linear-gradient(90deg, var(--surface), transparent);
+  background: linear-gradient(90deg, var(--bg-secondary), transparent);
 }
 
 .ledger-tape::after {
   right: 0;
-  background: linear-gradient(270deg, var(--surface), transparent);
+  background: linear-gradient(270deg, var(--bg-secondary), transparent);
 }
 
 .ledger-tape__track {
@@ -51,12 +51,12 @@
 }
 
 .ledger-tape__item.is-win {
-  color: var(--ink-green);
+  color: var(--green);
   font-weight: 600;
 }
 
 .ledger-tape__item.is-win strong {
-  color: var(--ink-green);
+  color: var(--green);
 }
 
 .ledger-tape__item.is-loss {
@@ -64,15 +64,15 @@
 }
 
 .ledger-tape__item.is-loss strong {
-  color: var(--ink-red);
+  color: var(--red);
 }
 
 .ledger-tape__item.is-pending {
-  color: var(--ink-amber);
+  color: var(--amber);
 }
 
 .ledger-tape__item strong {
-  color: var(--text-secondary);
+  color: var(--gold);
   font-weight: 600;
   text-transform: uppercase;
   font-size: 10px;
@@ -85,12 +85,11 @@
   opacity: 0.6;
 }
 
-/* Blinking cursor at the end */
 .ledger-tape__cursor {
   display: inline-block;
   width: 7px;
   height: 14px;
-  background: var(--green);
+  background: var(--gold);
   margin-left: 4px;
   animation: blink 1s step-end infinite;
   vertical-align: middle;
@@ -107,13 +106,12 @@
   .ledger-tape__track { animation: none; overflow-x: auto; }
 }
 
-/* Hover tooltip showing reasoning */
 .ledger-tape__tooltip {
   position: absolute;
   bottom: 100%;
   left: 14px;
-  background: var(--text);
-  color: var(--bg);
+  background: var(--surface-elevated);
+  color: var(--text);
   font-family: var(--font-body);
   font-size: 11px;
   padding: 6px 10px;
@@ -125,11 +123,12 @@
   pointer-events: none;
   line-height: 1.4;
   border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
   box-shadow: var(--shadow-md);
 }
 
 .ledger-tape__tooltip-signoff {
-  color: #FBBF24;
+  color: var(--red);
   font-weight: 600;
   margin-left: 6px;
 }
