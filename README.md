@@ -1,6 +1,6 @@
 # Revenue Recovery Agent
 
-**An AI agent that detects revenue at risk, determines the right intervention inside hard human-set bounds, executes it, and reports honest recovered-vs-cost metrics.**
+An AI agent that detects revenue at risk, determines the right intervention inside hard human-set bounds, executes it, and reports honest recovered-vs-cost metrics — for the Razorpay AI Buildathon.
 
 > Razorpay AI Buildathon · Track 03 — AI Revenue Recovery
 
@@ -10,40 +10,45 @@
 
 ## What this does
 
-The agent runs a **detect → diagnose → decide → execute → measure** loop across three revenue sources — payment failures, checkout abandonment, and overdue receivables. A rules engine enforces hard limits (max retries, cooldown, discount ceiling) **before** any LLM output is allowed to execute. The LLM proposes; the rules engine disposes. Every decision is logged with full reasoning, and a net-recovered-vs-baseline chart proves measured value on the same batch.
+The agent runs a **detect → diagnose → decide → execute → measure** loop across three revenue sources: **payment failures** (subscription dunning), **checkout abandonment** (cart recovery), and **B2B overdue receivables** (invoice recovery). On each item, `RulesEngine.eligibleActions()` computes the allow-list of bounded actions; the LLM (or a deterministic heuristic fallback if no API key is set) picks one action from that list and justifies the choice; `RulesEngine.enforceBounds()` re-validates the choice before anything executes. Every decision is logged with full reasoning, and a net-recovered-vs-baseline chart proves measured value on the same batch.
 
 ## Architecture
 
 ```
-backend/   Spring Boot 3 (Java 21) — detection, rules engine, LLM decision layer, mock execution, metrics
-frontend/  React + Vite — live dashboard, 8-page SPA with dark premium theme
+Detection → Diagnosis → Decision (RulesEngine bounds + LLM reasoning) → Execution (mocked) → Metrics
 ```
 
-**Flow:** `Detection → Diagnosis → Decision (RulesEngine bounds + LLM reasoning) → Execution (mocked) → Metrics`
-
-### Key files
+```
+backend/   Spring Boot 3 (Java 21) — rules engine, decision agent, mock execution, metrics
+frontend/  React + Vite — live dashboard, 8-page SPA
+```
 
 | What it proves | File |
 |---|---|
-| **Bounded workflow** (the hard limits) | `backend/.../recovery/RulesEngine.java` |
-| Decision layer + LLM prompt | `backend/.../recovery/DecisionAgentService.java` |
-| End-to-end loop (all 3 sources) | `backend/.../recovery/RecoveryOrchestratorService.java` |
-| Honest metrics (recovered − cost) | `backend/.../metrics/MetricsService.java` |
-| Realistic synthetic batch (320 items) | `backend/.../config/DataSeeder.java` |
+| Bounded workflow (hard limits enforced before any LLM output) | `backend/.../recovery/RulesEngine.java` |
+| Decision layer + LLM prompt + heuristic fallback | `backend/.../recovery/DecisionAgentService.java` |
+| End-to-end loop across all 3 revenue sources | `backend/.../recovery/RecoveryOrchestratorService.java` |
+| Honest metrics (recovered − intervention cost) | `backend/.../metrics/MetricsService.java` |
+| Realistic synthetic batch (320 items auto-seeded on startup) | `backend/.../config/DataSeeder.java` |
 | Human sign-off queue | `backend/.../recovery/RecoveryController.java` (`GET /pending-review`) |
-| Live bounds editor | `backend/.../config/ConfigController.java` (`PUT /config/bounds`) |
+| Live bounds editor (runtime config changes) | `backend/.../config/ConfigController.java` (`PUT /config/bounds`) |
+| Mutable bounds configuration | `backend/.../config/BoundsConfig.java` |
 
-### Non-negotiable constraints (enforced by RulesEngine)
+## Non-negotiable constraints
 
-| Rule | Limit |
+Pulled from `application.properties` → `BoundsConfig.java` → `RulesEngine.java`:
+
+| Rule | Default limit |
 |---|---|
-| Max retry attempts per transaction | 3 |
+| Max retry attempts per item | 3 |
 | Cooldown between retries | 60 minutes |
 | Max discount the agent can offer | 15% |
-| Minimum amount eligible for discount | ₹500 |
-| Actions requiring human sign-off | Discount above ceiling or 3rd consecutive failure |
+| Minimum amount eligible for a discount | ₹500 |
+| Actions requiring human sign-off | Discount above the ceiling, or 3rd consecutive failure |
 
-## Setup (verified — copy-paste these commands)
+These are enforced in plain Java (`RulesEngine`), evaluated **before** any LLM output is allowed to execute. The bounds are changeable at runtime via `PUT /api/config/bounds` — no server restart needed.
+
+## Running it locally
 
 ### Backend
 
@@ -52,7 +57,7 @@ cd backend
 mvn spring-boot:run
 ```
 
-Runs on `http://localhost:8080` with an in-memory H2 database — **no setup required**. 320 synthetic at-risk items (200 payment failures + 80 checkout abandonments + 40 overdue receivables) are seeded on startup.
+Runs on `http://localhost:8080` with an in-memory H2 database — **no setup required**. `DataSeeder` seeds 200 payment failures + 80 checkout abandonments + 40 overdue receivables (320 items total) and auto-runs a recovery batch on startup, so the dashboard shows real data immediately.
 
 ### Frontend
 
@@ -72,7 +77,7 @@ export LLM_ENABLED=true
 cd backend && mvn spring-boot:run
 ```
 
-Without these, the agent falls back to an explainable heuristic path — the demo never breaks.
+Without these, `DecisionAgentService` falls back to a deterministic heuristic path — the demo never breaks.
 
 ## Results (actual run — 320-item multi-source batch, heuristic fallback)
 
@@ -93,11 +98,11 @@ Without these, the agent falls back to an explainable heuristic path — the dem
 
 ## Using it
 
-1. Start the backend — 320 at-risk items are already seeded.
+1. Start the backend — 320 at-risk items are already seeded and a batch auto-runs.
 2. Start the frontend, open it, click **Run Batch**.
 3. Watch the stat cards, charts, and decision ledger populate.
 4. The **Agent vs. Baseline** chart is the headline number.
-5. Click any row in the decision ledger to see the agent's reasoning.
+5. Click any row in the decision ledger to see the agent's reasoning and full decision trace.
 6. Check **Alerts** for items requiring human sign-off.
 7. Use **Settings** to change recovery bounds at runtime and re-run.
 
@@ -106,8 +111,10 @@ Without these, the agent falls back to an explainable heuristic path — the dem
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/api/metrics` | Combined metrics across all 3 sources |
+| GET | `/api/metrics/dashboard` | Metrics + funnel + actions + efficiency in one response |
 | GET | `/api/metrics/funnel` | Recovery pipeline status distribution |
 | GET | `/api/metrics/actions` | Per-action success rate breakdown |
+| GET | `/api/metrics/efficiency` | Per-action ROI (recovered per rupee spent) |
 | GET | `/api/metrics/batches` | Per-batch metrics history |
 | POST | `/api/recovery/run-batch` | Execute a recovery batch |
 | GET | `/api/recovery/transactions` | All seeded transactions |
