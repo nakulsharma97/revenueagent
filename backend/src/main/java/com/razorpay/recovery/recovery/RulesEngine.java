@@ -1,6 +1,7 @@
 package com.razorpay.recovery.recovery;
 
 import com.razorpay.recovery.config.BoundsConfig;
+import com.razorpay.recovery.customer.Customer;
 import com.razorpay.recovery.checkout.CheckoutSession;
 import com.razorpay.recovery.receivable.Receivable;
 import com.razorpay.recovery.recovery.RecoveryAttempt.RecoveryAction;
@@ -33,6 +34,19 @@ public class RulesEngine {
     private int getMaxDiscountPercent() { return boundsConfig.getMaxDiscountPercent(); }
     private BigDecimal getMinAmountForDiscount() { return boundsConfig.getMinAmountForDiscount(); }
 
+    /** Get segment-aware bounds for a customer segment. */
+    private BoundsConfig.SegmentBounds getBoundsFor(Customer.CustomerSegment segment) {
+        return boundsConfig.boundsFor(segment);
+    }
+
+    /** Extract the customer segment from a transaction's subscription->customer chain. */
+    private Customer.CustomerSegment getSegment(Transaction tx) {
+        if (tx.getSubscription() != null && tx.getSubscription().getCustomer() != null) {
+            return tx.getSubscription().getCustomer().getCustomerSegment();
+        }
+        return Customer.CustomerSegment.STANDARD;
+    }
+
     /** Actions the transaction is currently allowed to take — the LLM must pick from this set. */
     public List<RecoveryAction> eligibleActions(Transaction tx) {
         List<RecoveryAction> eligible = new ArrayList<>();
@@ -46,15 +60,24 @@ public class RulesEngine {
         }
 
         if (tx.getFailureReason() != null && tx.getFailureReason().isRetryable()) {
-            eligible.add(RecoveryAction.RETRY_NOW);
-            eligible.add(RecoveryAction.RETRY_SCHEDULED);
+            if (tx.getRetryCount() == 0) {
+                // Silent-first: only background retry, no customer contact.
+                eligible.add(RecoveryAction.RETRY_SILENT);
+            } else {
+                // After silent retry has been attempted, open up all retry + customer-facing actions.
+                eligible.add(RecoveryAction.RETRY_NOW);
+                eligible.add(RecoveryAction.RETRY_SCHEDULED);
+            }
         }
 
-        eligible.add(RecoveryAction.SEND_PAYMENT_LINK);
+        // Customer-facing actions become eligible once silent-first has been attempted
+        if (tx.getRetryCount() > 0 || tx.getStatus() == com.razorpay.recovery.transaction.Transaction.TransactionStatus.IN_RECOVERY) {
+            eligible.add(RecoveryAction.SEND_PAYMENT_LINK);
 
-        if (tx.getAmount() != null && tx.getAmount().compareTo(getMinAmountForDiscount()) >= 0
-                && getMaxDiscountPercent() > 0) {
-            eligible.add(RecoveryAction.OFFER_DISCOUNT);
+            if (tx.getAmount() != null && tx.getAmount().compareTo(getMinAmountForDiscount()) >= 0
+                    && getMaxDiscountPercent() > 0) {
+                eligible.add(RecoveryAction.OFFER_DISCOUNT);
+            }
         }
 
         eligible.add(RecoveryAction.ESCALATE_TO_HUMAN);
@@ -118,6 +141,44 @@ public class RulesEngine {
                 ? RecoveryAction.SEND_PAYMENT_LINK
                 : RecoveryAction.ESCALATE_TO_HUMAN;
         return new LlmDecision(fallback, "Rules-engine fallback: proposed action was out of bounds.", 0.5, null);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Segment-aware eligibleActions for Transaction (Phase 2)
+    // ═══════════════════════════════════════════════════════════════
+
+    /** Segment-aware version: reads bounds based on customer's segment. */
+    public List<RecoveryAction> eligibleActions(Transaction tx, Customer.CustomerSegment segment) {
+        BoundsConfig.SegmentBounds bounds = getBoundsFor(segment);
+        List<RecoveryAction> eligible = new ArrayList<>();
+
+        if (tx.getRetryCount() >= bounds.maxRetries()) {
+            eligible.add(RecoveryAction.SEND_PAYMENT_LINK);
+            eligible.add(RecoveryAction.ESCALATE_TO_HUMAN);
+            eligible.add(RecoveryAction.ABANDON);
+            return eligible;
+        }
+
+        if (tx.getFailureReason() != null && tx.getFailureReason().isRetryable()) {
+            if (tx.getRetryCount() == 0) {
+                eligible.add(RecoveryAction.RETRY_SILENT);
+            } else {
+                eligible.add(RecoveryAction.RETRY_NOW);
+                eligible.add(RecoveryAction.RETRY_SCHEDULED);
+            }
+        }
+
+        // Customer-facing actions: eligible after silent retry attempted OR if entity is already in recovery
+        if (tx.getRetryCount() > 0 || tx.getStatus() == com.razorpay.recovery.transaction.Transaction.TransactionStatus.IN_RECOVERY) {
+            eligible.add(RecoveryAction.SEND_PAYMENT_LINK);
+            if (tx.getAmount() != null && tx.getAmount().compareTo(bounds.minAmountForDiscount()) >= 0
+                    && bounds.maxDiscountPercent() > 0) {
+                eligible.add(RecoveryAction.OFFER_DISCOUNT);
+            }
+        }
+
+        eligible.add(RecoveryAction.ESCALATE_TO_HUMAN);
+        return eligible;
     }
 
     // ═══════════════════════════════════════════════════════════════

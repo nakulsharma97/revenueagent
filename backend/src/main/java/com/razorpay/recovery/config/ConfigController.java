@@ -31,11 +31,12 @@ public class ConfigController {
                 request.maxRetries(),
                 request.maxDiscountPercent(),
                 request.minAmountForDiscount(),
-                request.retryCooldownMinutes()
+                request.retryCooldownMinutes(),
+                request.hvMaxRetries(),
+                request.hvMaxDiscountPercent(),
+                request.hvMinAmountForDiscount(),
+                request.language()
         );
-        if (request.language() != null) {
-            boundsConfig.setLanguage(request.language());
-        }
         return boundsConfig.snapshot();
     }
 
@@ -48,6 +49,9 @@ public class ConfigController {
             Integer maxDiscountPercent,
             BigDecimal minAmountForDiscount,
             Integer retryCooldownMinutes,
-            String language
+            String language,
+            Integer hvMaxRetries,
+            Integer hvMaxDiscountPercent,
+            BigDecimal hvMinAmountForDiscount
     ) {}
 }

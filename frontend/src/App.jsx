@@ -471,6 +471,9 @@ export default function App() {
         <SummaryStat label="RECOVERY RATE" value={metrics ? pct(metrics.recoveryRatePercent) : '—'} color="var(--gold)" />
         <SummaryStat label="NET REVENUE" value={fmt(metrics?.netRecovered)} color="var(--gold-bright)" />
         <SummaryStat label="BASELINE" value={fmt(metrics?.baselineNetRecovered)} />
+        <SummaryStat label="SILENT RECOVERY" value={metrics ? `${metrics.silentRecoveryRate ?? 0}%` : '—'} color="var(--text-secondary)" tooltip="% of recovered revenue from silent (no-customer-contact) attempts" />
+        <SummaryStat label="DSO" value={metrics ? `${metrics.dso ?? 0}d` : '—'} color="var(--amber)" tooltip="Days Sales Outstanding — lower is better, healthy B2B is <45 days" />
+        <SummaryStat label="AVG DAYS OVERDUE" value={metrics ? `${metrics.avgDaysOverdue ?? 0}d` : '—'} color="var(--amber)" />
         <SummaryStat label="PROMISE KEEP RATE" value={metrics ? `${metrics.promiseKeepRate ?? 0}%` : '—'} color="var(--green)" />
       </div>
 
@@ -508,6 +511,32 @@ export default function App() {
           </div>))}
         </div>
       </div>
+
+      {/* Segment breakdown */}
+      {metrics?.bySegment && (
+        <div className="card" style={{ marginBottom: 16, ...FW }}>
+          <div className="section-title" style={{ marginBottom: 4 }}>RECOVERY BY CUSTOMER SEGMENT</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>HIGH_VALUE customers (top 20% by transaction amount) get wider recovery bounds: more retries and a higher discount ceiling.</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+            {Object.entries(metrics.bySegment).map(([key, seg]) => (
+              <div key={key} style={{ padding: '18px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid', borderColor: key === 'HIGH_VALUE' ? 'var(--gold)' : 'var(--border)' }}>
+                <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: key === 'HIGH_VALUE' ? 'var(--gold)' : 'var(--text-muted)', letterSpacing: '0.04em', marginBottom: 10 }}>{key === 'HIGH_VALUE' ? '◆ HIGH VALUE' : '○ STANDARD'}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 24, fontWeight: 700, color: 'var(--text)' }}>{seg.atRisk}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>at risk</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 600, color: 'var(--green)' }}>{seg.recovered}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>recovered</span>
+                </div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--gold)', marginTop: 4 }}>{seg.recoveryRate}% recovery rate</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{fmt(seg.revenue)} recovered</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ marginBottom: 16 }}>
         {metrics ? <RecoveryChart netRecovered={metrics.netRecovered} baseline={metrics.baselineNetRecovered} /> : <SkeletonCard lines={2} height={280} />}
       </div>
@@ -585,6 +614,7 @@ export default function App() {
         <div className="card" style={FW}>
           <div style={{ fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>AGENT CONFIGURATION</div>
           <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>These values control the RulesEngine's hard bounds. Changes take effect on the next batch run.</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Standard Customer Bounds</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
             {[ { key: 'maxRetries', label: 'Max Retry Attempts', type: 'number' }, { key: 'maxDiscountPercent', label: 'Max Discount %', type: 'number' }, { key: 'retryCooldownMinutes', label: 'Cooldown (minutes)', type: 'number' }, { key: 'minAmountForDiscount', label: 'Min Amount for Discount (₹)', type: 'number' },
             ].map(f => (<div key={f.key}>
@@ -593,6 +623,20 @@ export default function App() {
                 style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text)', background: 'var(--bg-secondary)', transition: 'border-color var(--transition-fast)' }}
                 onFocus={e => e.target.style.borderColor = 'var(--gold)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
             </div>))}
+          </div>
+
+          <div style={{ marginTop: 14, padding: '10px 14px', background: 'var(--bg-secondary)', border: '1px solid var(--gold)', borderRadius: 'var(--radius-sm)' }}>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--gold)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>◆ High-Value Customer Bounds</div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>Wider limits for top 20% customers by transaction value — more retries, higher discount ceiling.</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+              {[ { key: 'hvMaxRetries', label: 'HV Max Retries', type: 'number' }, { key: 'hvMaxDiscountPercent', label: 'HV Max Discount %', type: 'number' }, { key: 'hvMinAmountForDiscount', label: 'HV Min Amount for Discount (₹)', type: 'number' },
+              ].map(f => (<div key={f.key}>
+                <label style={{ display: 'block', fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: 6 }}>{f.label}</label>
+                <input type={f.type} value={settingsLocal[f.key] ?? ''} onChange={e => setSettingsLocal(p => ({ ...p, [f.key]: e.target.type === 'number' ? Number(e.target.value) : e.target.value }))}
+                  style={{ width: '100%', padding: '10px 14px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: 14, color: 'var(--text)', background: 'var(--surface)', transition: 'border-color var(--transition-fast)' }}
+                  onFocus={e => e.target.style.borderColor = 'var(--gold)'} onBlur={e => e.target.style.borderColor = 'var(--border)'} />
+              </div>))}
+            </div>
           </div>
 
           {/* Preview Impact button */}

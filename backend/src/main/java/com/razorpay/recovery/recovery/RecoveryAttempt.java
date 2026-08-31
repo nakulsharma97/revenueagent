@@ -82,6 +82,9 @@ public class RecoveryAttempt {
     @Column(length = 1000)
     private String customerMessage;
 
+    /** False for silent/background retries (RETRY_SILENT, RETRY_NOW, RETRY_SCHEDULED), true for customer-facing actions. */
+    private boolean customerNotified;
+
     /**
      * Structured multi-step trace showing exactly how the agent reached its decision.
      * Built incrementally by RulesEngine and DecisionAgentService — never reconstructed.
@@ -98,7 +101,7 @@ public class RecoveryAttempt {
     }
 
     public enum RecoveryAction {
-        RETRY_NOW, RETRY_SCHEDULED, SEND_PAYMENT_LINK, OFFER_DISCOUNT,
+        RETRY_NOW, RETRY_SCHEDULED, RETRY_SILENT, SEND_PAYMENT_LINK, OFFER_DISCOUNT,
         ESCALATE_TO_HUMAN, ABANDON,
         CHECKOUT_REMINDER, OFFER_PAYMENT_PLAN, SEND_REMINDER,
         PROMISE_FOLLOWUP

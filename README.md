@@ -33,6 +33,10 @@ frontend/  React + Vite — live dashboard, 8-page SPA
 | Human sign-off queue | `backend/.../recovery/RecoveryController.java` (`GET /pending-review`) |
 | Live bounds editor (runtime config changes) | `backend/.../config/ConfigController.java` (`PUT /config/bounds`) |
 | Mutable bounds configuration | `backend/.../config/BoundsConfig.java` |
+| Silent-first recovery (RETRY_SILENT) | `RulesEngine.eligibleActions()` — first-attempt retryable failures use background retry only |
+| Customer segment-aware bounds | `BoundsConfig.boundsFor(segment)` — HIGH_VALUE gets wider limits |
+| DSO metric (B2B KPI) | `MetricsService.currentMetrics()` — Days Sales Outstanding for receivables |
+| Promise-to-pay tracker | `Receivable.promiseStatus` — tracks kept/broken promises |
 
 ## Non-negotiable constraints
 
@@ -91,18 +95,40 @@ Without these, `DecisionAgentService` falls back to a deterministic heuristic pa
 | Metric | Value |
 |---|---|
 | Transactions at risk | 320 |
-| Recovered | 161 (50.3% recovery rate) |
-| Revenue recovered | ₹1,25,86,357 |
-| Intervention cost | ₹4,217 |
-| **Net recovered** | **₹1,25,82,140** |
-| Naive baseline (retry-once) | ₹47,81,706 |
-| **Agent advantage** | **₹78,00,434 more than baseline** |
+| Recovered | 119 (37.2% recovery rate) |
+| Revenue recovered | ₹66,18,899 |
+| Intervention cost | ₹1.70 |
+| **Net recovered** | **₹66,18,897** |
+| Naive baseline (retry-once) | ₹27,56,627 |
+| **Agent advantage** | **₹38,62,270 more than baseline (+140%)** |
+
+**Silent-first recovery:**
+| Metric | Value |
+|---|---|
+| Silent recovery rate | 4.1% of recovered revenue from background-only retries |
+| First-attempt retryable failures | Use `RETRY_SILENT` — zero customer contact |
+| Customer-facing actions | Only after silent path is exhausted |
+
+**Customer segment-aware bounds:**
+| Segment | At Risk | Recovered | Rate | Revenue |
+|---|---|---|---|---|
+| STANDARD | 160 | 64 | 40.0% | ₹1,19,336 |
+| HIGH_VALUE (top 20%) | 40 | 19 | 47.5% | ₹1,51,981 |
+
+HIGH_VALUE customers get wider bounds: 5 retries (vs 3), 25% discount ceiling (vs 15%).
+
+**B2B receivables KPIs:**
+| Metric | Value |
+|---|---|
+| Days Sales Outstanding (DSO) | 61.0 days |
+| Average days overdue | 40.1 days |
+| Promise-keep rate | 85.7% |
 
 **Held-out subset (20%, never used to tune the agent's logic):** numbers computed by `GET /api/metrics?scope=held-out` — the held-out recovery rate and net revenue are close to but not identical to the full-batch numbers, confirming the split is real and the agent generalises beyond its training batch.
 
 **By source:**
-- Payment failures: 114/200 recovered (57%)
-- Checkout abandonment: 29/80 recovered (36%)
+- Payment failures: 83/200 recovered (41.5%)
+- Checkout abandonment: 18/80 recovered (22.5%)
 - Overdue receivables: 18/40 recovered (45%)
 
 ## Using it
@@ -126,12 +152,16 @@ Without these, `DecisionAgentService` falls back to a deterministic heuristic pa
 | GET | `/api/metrics/actions` | Per-action success rate breakdown |
 | GET | `/api/metrics/efficiency` | Per-action ROI (recovered per rupee spent) |
 | GET | `/api/metrics/batches` | Per-batch metrics history |
+| GET | `/api/metrics/simulate?maxRetries=X&maxDiscountPercent=Y` | What-if simulator (projects impact of bounds changes) |
 | POST | `/api/recovery/run-batch` | Execute a recovery batch |
 | GET | `/api/recovery/transactions` | All seeded transactions |
+| GET | `/api/recovery/receivables` | All receivables with promise-to-pay data |
 | GET | `/api/recovery/pending-review` | Items requiring human sign-off |
+| PUT | `/api/recovery/attempts/{id}/signoff` | Approve/reject a human sign-off request |
 | GET | `/api/recovery/export` | CSV export of all attempts |
-| GET | `/api/config/bounds` | Current recovery bounds |
-| PUT | `/api/config/bounds` | Update bounds at runtime |
+| POST | `/api/webhooks/razorpay/payment-failed` | Razorpay webhook ingestion (shape-compatible) |
+| GET | `/api/config/bounds` | Current recovery bounds (incl. HV bounds) |
+| PUT | `/api/config/bounds` | Update bounds at runtime (incl. HV bounds) |
 
 ## Tech stack
 

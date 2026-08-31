@@ -29,7 +29,15 @@ public class Customer {
     /** 0.0 (always fails) - 1.0 (always pays on time). Used by the agent as context. */
     private double paymentReliabilityScore;
 
+    /** Customer segment: STANDARD or HIGH_VALUE. HIGH_VALUE gets wider recovery bounds. */
+    @Enumerated(EnumType.STRING)
+    private CustomerSegment customerSegment = CustomerSegment.STANDARD;
+
     @JsonIgnore
     @OneToMany(mappedBy = "customer", cascade = CascadeType.ALL)
     private List<Subscription> subscriptions = new ArrayList<>();
+
+    public enum CustomerSegment {
+        STANDARD, HIGH_VALUE
+    }
 }

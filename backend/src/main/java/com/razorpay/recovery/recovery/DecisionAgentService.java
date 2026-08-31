@@ -281,9 +281,16 @@ public class DecisionAgentService {
 
     /** Deterministic, explainable stand-in for the LLM — used when no API key is configured. */
     private LlmDecision heuristicFallback(Transaction tx, List<RecoveryAction> eligible) {
-        if (eligible.contains(RecoveryAction.RETRY_NOW) && tx.getRetryCount() == 0) {
+        // Silent-first: first-attempt retryable failures use background retry only
+        if (eligible.contains(RecoveryAction.RETRY_SILENT) && tx.getRetryCount() == 0) {
+            return new LlmDecision(RecoveryAction.RETRY_SILENT,
+                    "Rules-only mode: silent recovery — no customer contact, background retry only.", 0.6, null,
+                    hinglish("Hum background mein dubara try kar rahe hain — aapko koi message nahi aayega.",
+                             "Retrying silently in the background — no customer notification sent."));
+        }
+        if (eligible.contains(RecoveryAction.RETRY_NOW)) {
             return new LlmDecision(RecoveryAction.RETRY_NOW,
-                    "Rules-only mode: first failure on a retryable decline code — retry immediately.", 0.6, null,
+                    "Rules-only mode: silent retry exhausted — retry immediately with customer notification.", 0.6, null,
                     hinglish("Aapka payment fail ho gaya tha. Hum dubara try kar rahe hain — kuch der mein paisa debit ho jayega.",
                              "Your payment failed. We are retrying now — the amount will be debited shortly."));
         }

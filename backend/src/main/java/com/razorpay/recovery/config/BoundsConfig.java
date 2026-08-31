@@ -51,15 +51,43 @@ public class BoundsConfig {
     /** Language for customer-facing messages: "en" (English) or "hinglish". */
     private volatile String language = "en";
 
+    // ── HIGH_VALUE segment bounds (wider limits for high-LTV customers) ──
+    // A real deployment would derive these from LTV/tenure data.
+    @Value("${recovery.hv.max-retries:5}")
+    private volatile int hvMaxRetries;
+
+    @Value("${recovery.hv.max-discount-percent:25}")
+    private volatile int hvMaxDiscountPercent;
+
+    @Value("${recovery.hv.min-amount-for-discount:500}")
+    private volatile BigDecimal hvMinAmountForDiscount;
+
+    /** Bounds for a given segment. */
+    public record SegmentBounds(int maxRetries, int maxDiscountPercent, BigDecimal minAmountForDiscount) {}
+
+    public SegmentBounds boundsFor(com.razorpay.recovery.customer.Customer.CustomerSegment segment) {
+        if (segment == com.razorpay.recovery.customer.Customer.CustomerSegment.HIGH_VALUE) {
+            return new SegmentBounds(hvMaxRetries, hvMaxDiscountPercent, hvMinAmountForDiscount);
+        }
+        return new SegmentBounds(maxRetries, maxDiscountPercent, minAmountForDiscount);
+    }
+
     /** Snapshot of current config for the GET endpoint. */
-    public record BoundsSnapshot(int maxRetries, int maxDiscountPercent, BigDecimal minAmountForDiscount, int retryCooldownMinutes, String language) {}
+    public record BoundsSnapshot(int maxRetries, int maxDiscountPercent, BigDecimal minAmountForDiscount, int retryCooldownMinutes, String language,
+                                  int hvMaxRetries, int hvMaxDiscountPercent, BigDecimal hvMinAmountForDiscount) {}
 
     public BoundsSnapshot snapshot() {
-        return new BoundsSnapshot(maxRetries, maxDiscountPercent, minAmountForDiscount, retryCooldownMinutes, language);
+        return new BoundsSnapshot(maxRetries, maxDiscountPercent, minAmountForDiscount, retryCooldownMinutes, language,
+                hvMaxRetries, hvMaxDiscountPercent, hvMinAmountForDiscount);
     }
 
     /** Apply values from a PUT request. Only non-null fields are updated. */
     public void apply(Integer maxRetries, Integer maxDiscountPercent, BigDecimal minAmountForDiscount, Integer retryCooldownMinutes) {
+        apply(maxRetries, maxDiscountPercent, minAmountForDiscount, retryCooldownMinutes, null, null, null, null);
+    }
+
+    public void apply(Integer maxRetries, Integer maxDiscountPercent, BigDecimal minAmountForDiscount, Integer retryCooldownMinutes,
+                      Integer hvMaxRetries, Integer hvMaxDiscountPercent, BigDecimal hvMinAmountForDiscount, String lang) {
         if (maxRetries != null && maxRetries >= 1 && maxRetries <= 10) {
             this.maxRetries = maxRetries;
         }
@@ -72,8 +100,17 @@ public class BoundsConfig {
         if (retryCooldownMinutes != null && retryCooldownMinutes >= 0 && retryCooldownMinutes <= 1440) {
             this.retryCooldownMinutes = retryCooldownMinutes;
         }
-        if (language != null && (language.equals("en") || language.equals("hinglish"))) {
-            this.language = language;
+        if (lang != null && (lang.equals("en") || lang.equals("hinglish"))) {
+            this.language = lang;
+        }
+        if (hvMaxRetries != null && hvMaxRetries >= 1 && hvMaxRetries <= 15) {
+            this.hvMaxRetries = hvMaxRetries;
+        }
+        if (hvMaxDiscountPercent != null && hvMaxDiscountPercent >= 0 && hvMaxDiscountPercent <= 50) {
+            this.hvMaxDiscountPercent = hvMaxDiscountPercent;
+        }
+        if (hvMinAmountForDiscount != null && hvMinAmountForDiscount.compareTo(BigDecimal.ZERO) > 0) {
+            this.hvMinAmountForDiscount = hvMinAmountForDiscount;
         }
     }
 }

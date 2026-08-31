@@ -32,6 +32,9 @@ class DecisionAgentServiceTest {
         boundsConfig.setMaxDiscountPercent(15);
         boundsConfig.setMinAmountForDiscount(new BigDecimal("500"));
         boundsConfig.setRetryCooldownMinutes(60);
+        boundsConfig.setHvMaxRetries(5);
+        boundsConfig.setHvMaxDiscountPercent(25);
+        boundsConfig.setHvMinAmountForDiscount(new BigDecimal("500"));
         RulesEngine rulesEngine = new RulesEngine(boundsConfig);
 
         decisionAgentService = new DecisionAgentService(rulesEngine, boundsConfig);
@@ -68,45 +71,48 @@ class DecisionAgentServiceTest {
     }
 
     @Test
-    void heuristicFallback_firstRetryableFailure_returnsRetryNow() {
+    void heuristicFallback_firstRetryableFailure_returnsRetrySilent() {
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
 
         LlmDecision decision = decisionAgentService.decide(tx);
 
-        assertEquals(RecoveryAction.RETRY_NOW, decision.action(),
-                "First retryable failure should trigger immediate retry");
+        assertEquals(RecoveryAction.RETRY_SILENT, decision.action(),
+                "First retryable failure should trigger silent background retry (no customer contact)");
     }
 
     @Test
-    void heuristicFallback_secondRetryableFailure_returnsRetryScheduled() {
+    void heuristicFallback_secondRetryableFailure_returnsRetryNow() {
+        // After silent retry has been attempted (retryCount=1), customer-facing retries are available
         Transaction tx = buildTx(FailureReason.BANK_SERVER_DOWN, 1, new BigDecimal("1000"));
 
         LlmDecision decision = decisionAgentService.decide(tx);
 
-        assertEquals(RecoveryAction.RETRY_SCHEDULED, decision.action(),
-                "Second retryable failure should trigger scheduled retry");
+        assertEquals(RecoveryAction.RETRY_NOW, decision.action(),
+                "Second retryable failure (after silent retry) should trigger immediate retry");
     }
 
     @Test
-    void heuristicFallback_terminalHighValue_returnsOfferDiscount() {
+    void heuristicFallback_terminalFirstAttempt_returnsEscalate() {
+        // Terminal failure on first attempt: silent-first means no customer-facing action
+        // eligible, only ESCALATE_TO_HUMAN
         Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 0, new BigDecimal("2499"));
 
         LlmDecision decision = decisionAgentService.decide(tx);
 
-        assertEquals(RecoveryAction.OFFER_DISCOUNT, decision.action(),
-                "Terminal failure on high-value tx should trigger discount offer");
-        assertEquals(10, decision.discountPercent(),
-                "Heuristic should propose 10% discount");
+        assertEquals(RecoveryAction.ESCALATE_TO_HUMAN, decision.action(),
+                "Terminal failure on first attempt should escalate (no customer-facing actions eligible)");
     }
 
     @Test
-    void heuristicFallback_terminalLowValue_returnsSendPaymentLink() {
-        Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 0, new BigDecimal("299"));
+    void heuristicFallback_terminalAfterRetry_returnsSendPaymentLink() {
+        // After at least one attempt, customer-facing actions become eligible
+        Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 1, new BigDecimal("299"));
+        tx.setStatus(com.razorpay.recovery.transaction.Transaction.TransactionStatus.IN_RECOVERY);
 
         LlmDecision decision = decisionAgentService.decide(tx);
 
         assertEquals(RecoveryAction.SEND_PAYMENT_LINK, decision.action(),
-                "Terminal failure on low-value tx (below discount threshold) should send payment link");
+                "Terminal failure after retry should send payment link");
     }
 
     @Test

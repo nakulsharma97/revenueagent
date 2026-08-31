@@ -29,15 +29,19 @@ class LiveBoundsEditorTest {
         boundsConfig.setMaxDiscountPercent(15);
         boundsConfig.setMinAmountForDiscount(new BigDecimal("500"));
         boundsConfig.setRetryCooldownMinutes(60);
+        boundsConfig.setHvMaxRetries(5);
+        boundsConfig.setHvMaxDiscountPercent(25);
+        boundsConfig.setHvMinAmountForDiscount(new BigDecimal("500"));
         rulesEngine = new RulesEngine(boundsConfig);
     }
 
     @Test
     void loweringDiscountCeiling_removesOfferDiscountFromEligible() {
-        // High-value retryable transaction normally gets OFFER_DISCOUNT in eligible set
-        Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("2499"));
+        // After silent retry (retryCount=1, IN_RECOVERY), customer-facing actions are available
+        Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 1, new BigDecimal("2499"));
+        tx.setStatus(com.razorpay.recovery.transaction.Transaction.TransactionStatus.IN_RECOVERY);
         assertTrue(rulesEngine.eligibleActions(tx).contains(RecoveryAction.OFFER_DISCOUNT),
-                "OFFER_DISCOUNT should be eligible with default 15% ceiling");
+                "OFFER_DISCOUNT should be eligible with default 15% ceiling after silent retry");
 
         // Lower the ceiling to 0 — OFFER_DISCOUNT should disappear from eligible
         boundsConfig.setMaxDiscountPercent(0);
@@ -83,7 +87,9 @@ class LiveBoundsEditorTest {
 
     @Test
     void loweringMinAmountForDiscount_removesLowValueDiscount() {
-        Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 0, new BigDecimal("600"));
+        // Use retryCount=1, IN_RECOVERY so OFFER_DISCOUNT is eligible
+        Transaction tx = buildTx(FailureReason.INSUFFICIENT_FUNDS, 1, new BigDecimal("600"));
+        tx.setStatus(com.razorpay.recovery.transaction.Transaction.TransactionStatus.IN_RECOVERY);
 
         // With default ₹500 min, ₹600 qualifies for discount
         assertTrue(rulesEngine.eligibleActions(tx).contains(RecoveryAction.OFFER_DISCOUNT),

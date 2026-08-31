@@ -22,6 +22,7 @@ import com.razorpay.recovery.checkout.*;
 import com.razorpay.recovery.receivable.*;
 import com.razorpay.recovery.recovery.*;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -74,7 +75,10 @@ public class MetricsService {
      * Compute metrics over either the full batch or the held-out subset.
      * When heldOutOnly=true, only entities where isHeldOut=true (and their corresponding
      * recovery attempts) are included — this is the held-out evaluation split.
+     * @Transactional(readOnly) needed because segment computation accesses lazy-loaded
+     * subscription->customer chain via tx.getSubscription().getCustomer().getCustomerSegment().
      */
+    @Transactional(readOnly = true)
     public BatchMetrics currentMetrics(boolean heldOutOnly) {
         List<Transaction> allTx = transactionRepository.findAll();
         List<CheckoutSession> allSessions = checkoutSessionRepository.findAll();
@@ -159,6 +163,82 @@ public class MetricsService {
         double promiseKeepRate = (promisesKept + promisesBroken) == 0 ? 0.0
                 : Math.round((promisesKept * 1000.0) / (promisesKept + promisesBroken)) / 10.0;
 
+        // Silent recovery rate: % of recovered revenue from silent (no-customer-contact) attempts
+        BigDecimal silentRecovered = finalAttempts.stream()
+                .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS && !a.isCustomerNotified())
+                .map(RecoveryAttempt::getAmountRecovered)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        double silentRecoveryRate = revenueRecovered.compareTo(BigDecimal.ZERO) == 0 ? 0.0
+                : Math.round(silentRecovered.multiply(BigDecimal.valueOf(1000))
+                        .divide(revenueRecovered, 10, RoundingMode.HALF_UP).doubleValue()) / 10.0;
+
+        // DSO: Days Sales Outstanding for receivables
+        // DSO = (total outstanding receivables / total credit sales) * days in period
+        // Proxy: use sum of all overdue+recovered receivable invoiceAmount as "credit sales"
+        BigDecimal totalCreditSales = allReceivables.stream()
+                .map(Receivable::getInvoiceAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalOutstanding = allReceivables.stream()
+                .filter(r -> r.getStatus() == Receivable.ReceivableStatus.OVERDUE)
+                .map(Receivable::getInvoiceAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Use 90-day period as a reasonable quarter proxy
+        double dso = totalCreditSales.compareTo(BigDecimal.ZERO) == 0 ? 0.0
+                : Math.round((totalOutstanding.doubleValue() / totalCreditSales.doubleValue()) * 90 * 10.0) / 10.0;
+
+        // Average days-overdue for currently OVERDUE receivables
+        List<Receivable> overdueReceivables = allReceivables.stream()
+                .filter(r -> r.getStatus() == Receivable.ReceivableStatus.OVERDUE)
+                .toList();
+        double avgDaysOverdue = overdueReceivables.isEmpty() ? 0.0
+                : Math.round(overdueReceivables.stream()
+                        .mapToInt(Receivable::getDaysOverdue)
+                        .average().orElse(0.0) * 10.0) / 10.0;
+
+        // Segment breakdown: STANDARD vs HIGH_VALUE
+        // Count at-risk and recovered per segment from payment transactions
+        long standardAtRisk = allTx.stream().filter(t -> t.getSubscription() != null && t.getSubscription().getCustomer() != null && t.getSubscription().getCustomer().getCustomerSegment() == com.razorpay.recovery.customer.Customer.CustomerSegment.STANDARD).count();
+        long highValueAtRisk = allTx.stream().filter(t -> t.getSubscription() != null && t.getSubscription().getCustomer() != null && t.getSubscription().getCustomer().getCustomerSegment() == com.razorpay.recovery.customer.Customer.CustomerSegment.HIGH_VALUE).count();
+        long standardRecovered = finalAttempts.stream()
+                .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS && a.getSourceType() == SourceType.PAYMENT
+                        && a.getTransaction() != null && a.getTransaction().getSubscription() != null
+                        && a.getTransaction().getSubscription().getCustomer() != null
+                        && a.getTransaction().getSubscription().getCustomer().getCustomerSegment() == com.razorpay.recovery.customer.Customer.CustomerSegment.STANDARD)
+                .count();
+        long highValueRecovered = finalAttempts.stream()
+                .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS && a.getSourceType() == SourceType.PAYMENT
+                        && a.getTransaction() != null && a.getTransaction().getSubscription() != null
+                        && a.getTransaction().getSubscription().getCustomer() != null
+                        && a.getTransaction().getSubscription().getCustomer().getCustomerSegment() == com.razorpay.recovery.customer.Customer.CustomerSegment.HIGH_VALUE)
+                .count();
+        BigDecimal standardRevenue = finalAttempts.stream()
+                .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS && a.getSourceType() == SourceType.PAYMENT
+                        && a.getTransaction() != null && a.getTransaction().getSubscription() != null
+                        && a.getTransaction().getSubscription().getCustomer() != null
+                        && a.getTransaction().getSubscription().getCustomer().getCustomerSegment() == com.razorpay.recovery.customer.Customer.CustomerSegment.STANDARD)
+                .map(RecoveryAttempt::getAmountRecovered)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal highValueRevenue = finalAttempts.stream()
+                .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS && a.getSourceType() == SourceType.PAYMENT
+                        && a.getTransaction() != null && a.getTransaction().getSubscription() != null
+                        && a.getTransaction().getSubscription().getCustomer() != null
+                        && a.getTransaction().getSubscription().getCustomer().getCustomerSegment() == com.razorpay.recovery.customer.Customer.CustomerSegment.HIGH_VALUE)
+                .map(RecoveryAttempt::getAmountRecovered)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        Map<String, Object> bySegment = new LinkedHashMap<>();
+        bySegment.put("STANDARD", Map.of(
+                "atRisk", standardAtRisk,
+                "recovered", standardRecovered,
+                "revenue", standardRevenue.setScale(2, RoundingMode.HALF_UP),
+                "recoveryRate", standardAtRisk == 0 ? 0 : Math.round(standardRecovered * 1000.0 / standardAtRisk) / 10.0
+        ));
+        bySegment.put("HIGH_VALUE", Map.of(
+                "atRisk", highValueAtRisk,
+                "recovered", highValueRecovered,
+                "revenue", highValueRevenue.setScale(2, RoundingMode.HALF_UP),
+                "recoveryRate", highValueAtRisk == 0 ? 0 : Math.round(highValueRecovered * 1000.0 / highValueAtRisk) / 10.0
+        ));
+
         return new BatchMetrics(
                 totalAtRisk,
                 recoveredCount,
@@ -171,7 +251,11 @@ public class MetricsService {
                 paymentAtRisk, checkoutAtRisk, receivableAtRisk,
                 paymentRecovered, checkoutRecovered, receivableRecovered,
                 bySource,
-                promiseKeepRate
+                promiseKeepRate,
+                silentRecoveryRate,
+                dso,
+                avgDaysOverdue,
+                bySegment
         );
     }
 
@@ -449,7 +533,11 @@ public class MetricsService {
                 actual.paymentAtRisk(), actual.checkoutAtRisk(), actual.receivableAtRisk(),
                 actual.paymentRecovered(), actual.checkoutRecovered(), actual.receivableRecovered(),
                 actual.bySource(),
-                actual.promiseKeepRate()
+                actual.promiseKeepRate(),
+                actual.silentRecoveryRate(),
+                actual.dso(),
+                actual.avgDaysOverdue(),
+                actual.bySegment()
         );
 
         return new SimulationResult(
@@ -472,7 +560,7 @@ public class MetricsService {
         if (action == null) return false;
 
         return switch (action) {
-            case RETRY_NOW, RETRY_SCHEDULED -> {
+            case RETRY_NOW, RETRY_SCHEDULED, RETRY_SILENT -> {
                 // Get the source entity's retry count from the attempt's reasoning/context
                 // We use the transaction's retryCount stored in the attempt
                 int retryCount = extractRetryCount(a);

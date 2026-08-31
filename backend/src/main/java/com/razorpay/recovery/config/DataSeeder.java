@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Random;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -99,13 +100,16 @@ public class DataSeeder implements CommandLineRunner {
         // 1. Seed 200 payment failure transactions
         seedPaymentFailures(200);
 
-        // 2. Seed 80 abandoned checkout sessions
+        // 2. Assign customer segments: top 20% by transaction amount = HIGH_VALUE
+        assignCustomerSegments();
+
+        // 3. Seed 80 abandoned checkout sessions
         seedCheckoutAbandonment(80);
 
-        // 3. Seed 40 overdue receivables
+        // 4. Seed 40 overdue receivables
         seedReceivables(40);
 
-        // 4. Auto-run a recovery batch so dashboard shows real data on first load
+        // 5. Auto-run a recovery batch so dashboard shows real data on first load
         try {
             var results = orchestrator.runBatch();
             org.slf4j.LoggerFactory.getLogger(DataSeeder.class)
@@ -114,6 +118,34 @@ public class DataSeeder implements CommandLineRunner {
             org.slf4j.LoggerFactory.getLogger(DataSeeder.class)
                 .error("DataSeeder: Auto batch failed — {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Derive customer segments: top 20% by single-transaction amount = HIGH_VALUE.
+     * A real deployment would compute this from actual LTV/tenure data.
+     */
+    private void assignCustomerSegments() {
+        List<Transaction> allTx = transactionRepository.findAll();
+        // Sort by amount descending
+        List<Transaction> sorted = allTx.stream()
+                .sorted((a, b) -> b.getAmount().compareTo(a.getAmount()))
+                .toList();
+        int threshold = Math.max(1, (int)(sorted.size() * 0.20));
+        java.util.Set<Long> highValueCustomerIds = new java.util.HashSet<>();
+        for (int i = 0; i < threshold && i < sorted.size(); i++) {
+            Transaction tx = sorted.get(i);
+            if (tx.getSubscription() != null && tx.getSubscription().getCustomer() != null) {
+                highValueCustomerIds.add(tx.getSubscription().getCustomer().getId());
+            }
+        }
+        for (Customer c : customerRepository.findAll()) {
+            if (highValueCustomerIds.contains(c.getId())) {
+                c.setCustomerSegment(Customer.CustomerSegment.HIGH_VALUE);
+            }
+            customerRepository.save(c);
+        }
+        org.slf4j.LoggerFactory.getLogger(DataSeeder.class)
+                .info("DataSeeder: Assigned {} HIGH_VALUE customers out of {}", highValueCustomerIds.size(), customerRepository.findAll().size());
     }
 
     private void seedPaymentFailures(int count) {

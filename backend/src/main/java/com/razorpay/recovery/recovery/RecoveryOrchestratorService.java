@@ -329,8 +329,13 @@ public class RecoveryOrchestratorService {
     }
 
     private boolean executePayment(Transaction tx, LlmDecision decision, RecoveryAttempt attempt) {
+        // Set customerNotified based on action type
+        attempt.setCustomerNotified(switch (decision.action()) {
+            case RETRY_SILENT, RETRY_NOW, RETRY_SCHEDULED -> false;
+            default -> true;
+        });
         return switch (decision.action()) {
-            case RETRY_NOW, RETRY_SCHEDULED -> paymentGateway.attemptCharge(tx);
+            case RETRY_SILENT, RETRY_NOW, RETRY_SCHEDULED -> paymentGateway.attemptCharge(tx);
             case SEND_PAYMENT_LINK -> {
                 boolean paid = notificationService.sendPaymentLink(tx);
                 attempt.setInterventionCost(notificationService.costOf(true));
@@ -412,6 +417,8 @@ public class RecoveryOrchestratorService {
     }
 
     private boolean executeCheckout(CheckoutSession session, LlmDecision decision, RecoveryAttempt attempt) {
+        // Checkout actions are always customer-facing
+        attempt.setCustomerNotified(true);
         return switch (decision.action()) {
             case CHECKOUT_REMINDER -> notificationService.sendCheckoutReminder(session);
             case SEND_PAYMENT_LINK -> {
@@ -584,6 +591,8 @@ public class RecoveryOrchestratorService {
     }
 
     private boolean executeReceivable(Receivable receivable, LlmDecision decision, RecoveryAttempt attempt) {
+        // Receivable actions are always customer-facing (B2B communication)
+        attempt.setCustomerNotified(true);
         return switch (decision.action()) {
             case SEND_REMINDER -> notificationService.sendReceivableReminder(receivable);
             case OFFER_PAYMENT_PLAN -> {

@@ -1,7 +1,8 @@
 import { useState, Fragment, useMemo, memo } from 'react';
 
 const ACTION_COLORS = {
-  RETRY_NOW: 'var(--gold)', RETRY_SCHEDULED: 'var(--gold-soft)', SEND_PAYMENT_LINK: 'var(--amber)',
+  RETRY_NOW: 'var(--gold)', RETRY_SCHEDULED: 'var(--gold-soft)', RETRY_SILENT: 'var(--text-muted)',
+  SEND_PAYMENT_LINK: 'var(--amber)',
   OFFER_DISCOUNT: 'var(--gold-bright)', ESCALATE_TO_HUMAN: 'var(--red)', ABANDON: 'var(--text-muted)',
   CHECKOUT_REMINDER: 'var(--amber)', OFFER_PAYMENT_PLAN: 'var(--green)', SEND_REMINDER: 'var(--gold)',
   PROMISE_FOLLOWUP: 'var(--amber)',
@@ -13,7 +14,7 @@ const OUTCOME_STYLES = {
   PENDING: { color: 'var(--amber)', bg: 'var(--amber-bg)', label: 'PENDING' },
 };
 
-const ACTION_OPTIONS = ['All', 'RETRY_NOW', 'RETRY_SCHEDULED', 'SEND_PAYMENT_LINK', 'OFFER_DISCOUNT', 'ESCALATE_TO_HUMAN', 'ABANDON', 'CHECKOUT_REMINDER', 'OFFER_PAYMENT_PLAN', 'SEND_REMINDER', 'PROMISE_FOLLOWUP'];
+const ACTION_OPTIONS = ['All', 'RETRY_SILENT', 'RETRY_NOW', 'RETRY_SCHEDULED', 'SEND_PAYMENT_LINK', 'OFFER_DISCOUNT', 'ESCALATE_TO_HUMAN', 'ABANDON', 'CHECKOUT_REMINDER', 'OFFER_PAYMENT_PLAN', 'SEND_REMINDER', 'PROMISE_FOLLOWUP'];
 const OUTCOME_OPTIONS = ['All', 'SUCCESS', 'FAILED', 'PENDING'];
 const SOURCE_OPTIONS = ['All', 'PAYMENT', 'CHECKOUT', 'RECEIVABLE'];
 
@@ -88,6 +89,9 @@ function AttemptTableInner({ attempts, onSelectAttempt }) {
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: ACTION_COLORS[a.actionTaken] || 'var(--text-muted)', flexShrink: 0 }} />
                         <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-secondary)' }}>{a.actionTaken?.replaceAll('_', ' ')}</span>
+                        {!a.customerNotified && a.actionTaken !== 'ESCALATE_TO_HUMAN' && a.actionTaken !== 'ABANDON' && (
+                          <span style={{ padding: '1px 5px', borderRadius: 'var(--radius-full)', background: 'var(--surface-hover)', border: '1px solid var(--border)', fontSize: 9, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>SILENT</span>
+                        )}
                       </span>
                     </td>
                     <td style={{ padding: '10px 12px' }} onClick={() => setOpenId(isOpen ? null : a.id)}>
