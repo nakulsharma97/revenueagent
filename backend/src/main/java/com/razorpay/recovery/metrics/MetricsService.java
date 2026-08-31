@@ -594,4 +594,69 @@ public class MetricsService {
         if (a.getReceivable() != null) return a.getReceivable().getInvoiceAmount();
         return BigDecimal.ZERO;
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Uplift Report — control vs treatment, per segment
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Uplift analysis: compares control group (no intervention) recovery rate
+     * against treatment group (agent intervention) recovery rate, broken down
+     * by uplift segment.
+     *
+     * The delta per segment = (treatment recovery rate) - (control recovery rate)
+     * for that segment. A large positive delta for PERSUADABLE proves intervention helps.
+     */
+    public UpliftReport upliftReport() {
+        List<RecoveryAttempt> allAttempts = attemptRepository.findAll();
+
+        // Control group: all attempts where actionTaken = NO_ACTION
+        List<RecoveryAttempt> controlAttempts = allAttempts.stream()
+                .filter(a -> a.getActionTaken() == RecoveryAction.NO_ACTION)
+                .toList();
+        long controlTotal = controlAttempts.size();
+        long controlRecovered = controlAttempts.stream()
+                .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
+        double controlRate = controlTotal == 0 ? 0.0
+                : Math.round(controlRecovered * 1000.0 / controlTotal) / 10.0;
+
+        // Treatment group: all attempts where actionTaken != NO_ACTION
+        List<RecoveryAttempt> treatmentAttempts = allAttempts.stream()
+                .filter(a -> a.getActionTaken() != RecoveryAction.NO_ACTION)
+                .toList();
+
+        // Per-segment breakdown
+        java.util.Map<String, UpliftReport.SegmentReport> segments = new java.util.LinkedHashMap<>();
+        for (com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment seg : com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment.values()) {
+            // Control rate for this segment
+            List<RecoveryAttempt> segControl = controlAttempts.stream()
+                    .filter(a -> a.getUpliftSegment() == seg)
+                    .toList();
+            long segControlTotal = segControl.size();
+            long segControlRecovered = segControl.stream()
+                    .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
+            double segControlRate = segControlTotal == 0 ? 0.0
+                    : Math.round(segControlRecovered * 1000.0 / segControlTotal) / 10.0;
+
+            // Treatment rate for this segment
+            List<RecoveryAttempt> segTreatment = treatmentAttempts.stream()
+                    .filter(a -> a.getUpliftSegment() == seg)
+                    .toList();
+            long segTreatmentTotal = segTreatment.size();
+            long segTreatmentRecovered = segTreatment.stream()
+                    .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
+            double segTreatmentRate = segTreatmentTotal == 0 ? 0.0
+                    : Math.round(segTreatmentRecovered * 1000.0 / segTreatmentTotal) / 10.0;
+
+            double delta = Math.round((segTreatmentRate - segControlRate) * 10.0) / 10.0;
+
+            segments.put(seg.name(), new UpliftReport.SegmentReport(
+                    seg.name(), segControlTotal, segControlRecovered, segControlRate,
+                    segTreatmentTotal, segTreatmentRecovered, segTreatmentRate, delta
+            ));
+            //noinspection unchecked
+        }
+
+        return new UpliftReport(controlTotal, controlRecovered, controlRate, segments);
+    }
 }

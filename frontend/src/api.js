@@ -72,6 +72,12 @@ export async function fetchPendingReview() {
   return res.json();
 }
 
+export async function fetchUplift() {
+  const res = await fetch(`${API_BASE}/api/metrics/uplift`);
+  if (!res.ok) throw new Error('uplift fetch failed');
+  return res.json();
+}
+
 export function exportCsv() {
   window.open(`${API_BASE}/api/recovery/export`, '_blank');
 }

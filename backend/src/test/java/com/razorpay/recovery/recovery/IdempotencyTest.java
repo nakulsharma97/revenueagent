@@ -53,14 +53,18 @@ class IdempotencyTest {
         boundsConfig.setMaxDiscountPercent(15);
         boundsConfig.setMinAmountForDiscount(new BigDecimal("500"));
         boundsConfig.setRetryCooldownMinutes(60);
+        boundsConfig.setHvMaxRetries(5);
+        boundsConfig.setHvMaxDiscountPercent(25);
+        boundsConfig.setHvMinAmountForDiscount(new BigDecimal("500"));
 
         var rulesEngine = new RulesEngine(boundsConfig);
         var decisionAgentService = new DecisionAgentService(rulesEngine, boundsConfig);
+        var upliftService = new UpliftSegmentationService();
 
         orchestrator = new RecoveryOrchestratorService(
                 transactionRepository, checkoutSessionRepository, receivableRepository,
                 attemptRepository, decisionAgentService, paymentGateway, notificationService,
-                boundsConfig
+                boundsConfig, rulesEngine, upliftService
         );
     }
 

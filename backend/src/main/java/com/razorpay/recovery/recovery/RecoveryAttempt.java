@@ -85,6 +85,10 @@ public class RecoveryAttempt {
     /** False for silent/background retries (RETRY_SILENT, RETRY_NOW, RETRY_SCHEDULED), true for customer-facing actions. */
     private boolean customerNotified;
 
+    /** Uplift segment classification: SURE_THING, LOST_CAUSE, PERSUADABLE, DO_NOT_DISTURB. */
+    @Enumerated(EnumType.STRING)
+    private UpliftSegment upliftSegment;
+
     /**
      * Structured multi-step trace showing exactly how the agent reached its decision.
      * Built incrementally by RulesEngine and DecisionAgentService — never reconstructed.
@@ -104,7 +108,8 @@ public class RecoveryAttempt {
         RETRY_NOW, RETRY_SCHEDULED, RETRY_SILENT, SEND_PAYMENT_LINK, OFFER_DISCOUNT,
         ESCALATE_TO_HUMAN, ABANDON,
         CHECKOUT_REMINDER, OFFER_PAYMENT_PLAN, SEND_REMINDER,
-        PROMISE_FOLLOWUP
+        PROMISE_FOLLOWUP,
+        NO_ACTION
     }
 
     public enum AttemptOutcome {
@@ -113,5 +118,17 @@ public class RecoveryAttempt {
 
     public enum SignoffStatus {
         PENDING, APPROVED, REJECTED
+    }
+
+    /** Uplift modeling segments — determines which interventions are worth spending. */
+    public enum UpliftSegment {
+        /** Would recover anyway — don't spend costly interventions here. */
+        SURE_THING,
+        /** Unrecoverable regardless of intervention — don't waste resources. */
+        LOST_CAUSE,
+        /** Intervention genuinely changes the outcome — primary target for discounts/messages. */
+        PERSUADABLE,
+        /** Prior attempt failed and value is low — prefer silence over escalation. */
+        DO_NOT_DISTURB
     }
 }

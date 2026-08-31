@@ -49,6 +49,8 @@ public class RecoveryOrchestratorService {
     private final MockPaymentGatewayService paymentGateway;
     private final MockNotificationService notificationService;
     private final BoundsConfig boundsConfig;
+    private final RulesEngine rulesEngine;
+    private final UpliftSegmentationService upliftService;
 
     private int getCooldownMinutes() { return boundsConfig.getRetryCooldownMinutes(); }
     private int getMaxRetries() { return boundsConfig.getMaxRetries(); }
@@ -80,7 +82,9 @@ public class RecoveryOrchestratorService {
                                         DecisionAgentService decisionAgentService,
                                         MockPaymentGatewayService paymentGateway,
                                         MockNotificationService notificationService,
-                                        BoundsConfig boundsConfig) {
+                                        BoundsConfig boundsConfig,
+                                        RulesEngine rulesEngine,
+                                        UpliftSegmentationService upliftService) {
         this.transactionRepository = transactionRepository;
         this.checkoutSessionRepository = checkoutSessionRepository;
         this.receivableRepository = receivableRepository;
@@ -89,6 +93,8 @@ public class RecoveryOrchestratorService {
         this.paymentGateway = paymentGateway;
         this.notificationService = notificationService;
         this.boundsConfig = boundsConfig;
+        this.rulesEngine = rulesEngine;
+        this.upliftService = upliftService;
     }
 
     /**
@@ -241,6 +247,27 @@ public class RecoveryOrchestratorService {
         DecisionTrace trace = new DecisionTrace();
         trace.add("DETECTION", "Transaction TX#" + tx.getId() + " flagged as AT_RISK (amount=" + tx.getAmount() + ", failureReason=" + tx.getFailureReason() + ")");
 
+        // ── Control group: no intervention, just monitor natural recovery ──
+        if (tx.isControlGroup()) {
+            trace.add("CONTROL_GROUP", "Entity is in control group — no agent intervention. Monitoring natural recovery.");
+            com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(tx);
+            boolean naturalSuccess = paymentGateway.attemptCharge(tx); // same probability model, zero intervention
+            trace.add("NATURAL_RECOVERY", "MockPaymentGatewayService.attemptCharge(TX#" + tx.getId() + ") -> " + (naturalSuccess ? "SUCCESS" : "FAILED") + " (no intervention)");
+            RecoveryAttempt attempt = new RecoveryAttempt();
+            attempt.setSourceType(SourceType.PAYMENT);
+            attempt.setTransaction(tx);
+            attempt.setActionTaken(RecoveryAction.NO_ACTION);
+            attempt.setReasoning("Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
+            attempt.setConfidence(1.0);
+            attempt.setOutcome(naturalSuccess ? AttemptOutcome.SUCCESS : AttemptOutcome.FAILED);
+            attempt.setAmountRecovered(naturalSuccess ? tx.getAmount() : BigDecimal.ZERO);
+            attempt.setBatchId(batchId);
+            attempt.setExecutedAt(LocalDateTime.now());
+            attempt.setUpliftSegment(segment);
+            attempt.setDecisionTrace(trace);
+            return attempt;
+        }
+
         if (tx.getEventId() != null && alreadyRecoveredEvents.contains(tx.getEventId())) {
             trace.add("IDEMPOTENCY_SKIP", "EventId=" + tx.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
             return persistSkip(tx, null, null, batchId, 0, trace);
@@ -254,8 +281,21 @@ public class RecoveryOrchestratorService {
             }
         }
 
+        // ── Classify uplift segment ──
+        com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(tx);
+        trace.add("UPLIFT_CLASSIFY", "Segment: " + segment + " (reliability=" + (tx.getSubscription() != null && tx.getSubscription().getCustomer() != null ? tx.getSubscription().getCustomer().getPaymentReliabilityScore() : 0.5) + ", retryCount=" + tx.getRetryCount() + ", amount=" + tx.getAmount() + ")");
+
         DecisionResult result = decisionAgentService.decideWithMeta(tx, trace);
         LlmDecision decision = result.decision();
+
+        // ── Apply uplift-segment filter to eligible actions ──
+        List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx);
+        rulesEngine.filterByUpliftSegment(eligible, segment);
+        if (!eligible.contains(decision.action())) {
+            // Original choice filtered out by uplift segment — pick the first remaining eligible action
+            trace.add("UPLIFT_FILTER", "Action " + decision.action() + " removed for segment " + segment + " — falling back to " + eligible.get(0));
+            decision = new LlmDecision(eligible.get(0), "Uplift-segment " + segment + " filtered: " + decision.reasoning(), decision.confidence(), decision.discountPercent());
+        }
 
         RecoveryAttempt attempt = new RecoveryAttempt();
         attempt.setSourceType(SourceType.PAYMENT);
@@ -270,6 +310,7 @@ public class RecoveryOrchestratorService {
         attempt.setSignoffReason(result.signoffReason());
         attempt.setDecisionTrace(trace);
         attempt.setCustomerMessage(decision.customerMessage());
+        attempt.setUpliftSegment(segment);
 
         boolean success = executePayment(tx, decision, attempt);
         trace.add("EXECUTION", "MockPaymentGatewayService.attemptCharge(TX#" + tx.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
@@ -460,6 +501,27 @@ public class RecoveryOrchestratorService {
         DecisionTrace trace = new DecisionTrace();
         trace.add("DETECTION", "CheckoutSession#" + session.getId() + " flagged as ABANDONED (amount=" + session.getCartAmount() + ", reason=" + session.getAbandonmentReason() + ")");
 
+        // ── Control group: no intervention ──
+        if (session.isControlGroup()) {
+            trace.add("CONTROL_GROUP", "Entity is in control group — no agent intervention.");
+            com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(session);
+            boolean naturalSuccess = notificationService.sendCheckoutReminder(session); // same baseline, no discount
+            trace.add("NATURAL_RECOVERY", "Natural recovery for Checkout#" + session.getId() + " -> " + (naturalSuccess ? "SUCCESS" : "FAILED"));
+            RecoveryAttempt attempt = new RecoveryAttempt();
+            attempt.setSourceType(SourceType.CHECKOUT);
+            attempt.setCheckoutSession(session);
+            attempt.setActionTaken(RecoveryAction.NO_ACTION);
+            attempt.setReasoning("Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
+            attempt.setConfidence(1.0);
+            attempt.setOutcome(naturalSuccess ? AttemptOutcome.SUCCESS : AttemptOutcome.FAILED);
+            attempt.setAmountRecovered(naturalSuccess ? session.getCartAmount() : BigDecimal.ZERO);
+            attempt.setBatchId(batchId);
+            attempt.setExecutedAt(LocalDateTime.now());
+            attempt.setUpliftSegment(segment);
+            attempt.setDecisionTrace(trace);
+            return attempt;
+        }
+
         if (session.getEventId() != null && alreadyRecoveredEvents.contains(session.getEventId())) {
             trace.add("IDEMPOTENCY_SKIP", "EventId=" + session.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
             return persistSkip(null, session, null, batchId, 0, trace);
@@ -472,6 +534,9 @@ public class RecoveryOrchestratorService {
                 return persistSkip(null, session, null, batchId, minSince, trace);
             }
         }
+
+        com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(session);
+        trace.add("UPLIFT_CLASSIFY", "Segment: " + segment);
 
         DecisionResult result = decisionAgentService.decideWithMetaCheckout(session, trace);
         LlmDecision decision = result.decision();
@@ -489,6 +554,7 @@ public class RecoveryOrchestratorService {
         attempt.setSignoffReason(result.signoffReason());
         attempt.setDecisionTrace(trace);
         attempt.setCustomerMessage(decision.customerMessage());
+        attempt.setUpliftSegment(segment);
 
         boolean success = executeCheckout(session, decision, attempt);
         trace.add("EXECUTION", "MockNotificationService.execute(Checkout#" + session.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
@@ -554,6 +620,28 @@ public class RecoveryOrchestratorService {
         DecisionTrace trace = new DecisionTrace();
         trace.add("DETECTION", "Receivable#" + receivable.getId() + " flagged as OVERDUE (amount=" + receivable.getInvoiceAmount() + ", daysOverdue=" + receivable.getDaysOverdue() + ")");
 
+        // ── Control group: no intervention ──
+        if (receivable.isControlGroup()) {
+            trace.add("CONTROL_GROUP", "Entity is in control group — no agent intervention.");
+            com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(receivable);
+            // Simulate natural recovery: flat 25% chance (same as naive reminder baseline)
+            boolean naturalSuccess = new java.util.Random(42).nextDouble() < 0.25;
+            trace.add("NATURAL_RECOVERY", "Natural recovery for Receivable#" + receivable.getId() + " -> " + (naturalSuccess ? "SUCCESS" : "FAILED"));
+            RecoveryAttempt attempt = new RecoveryAttempt();
+            attempt.setSourceType(SourceType.RECEIVABLE);
+            attempt.setReceivable(receivable);
+            attempt.setActionTaken(RecoveryAction.NO_ACTION);
+            attempt.setReasoning("Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
+            attempt.setConfidence(1.0);
+            attempt.setOutcome(naturalSuccess ? AttemptOutcome.SUCCESS : AttemptOutcome.FAILED);
+            attempt.setAmountRecovered(naturalSuccess ? receivable.getInvoiceAmount() : BigDecimal.ZERO);
+            attempt.setBatchId(batchId);
+            attempt.setExecutedAt(LocalDateTime.now());
+            attempt.setUpliftSegment(segment);
+            attempt.setDecisionTrace(trace);
+            return attempt;
+        }
+
         if (receivable.getEventId() != null && alreadyRecoveredEvents.contains(receivable.getEventId())) {
             trace.add("IDEMPOTENCY_SKIP", "EventId=" + receivable.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
             return persistSkip(null, null, receivable, batchId, 0, trace);
@@ -565,6 +653,9 @@ public class RecoveryOrchestratorService {
             receivable.setPromiseStatus(com.razorpay.recovery.receivable.Receivable.PromiseStatus.BROKEN);
             trace.add("PROMISE_CHECK", "Promise date " + receivable.getPromisedPaymentDate() + " has passed without payment — status set to BROKEN.");
         }
+
+        com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(receivable);
+        trace.add("UPLIFT_CLASSIFY", "Segment: " + segment);
 
         DecisionResult result = decisionAgentService.decideWithMetaReceivable(receivable, trace);
         LlmDecision decision = result.decision();
@@ -582,6 +673,7 @@ public class RecoveryOrchestratorService {
         attempt.setSignoffReason(result.signoffReason());
         attempt.setDecisionTrace(trace);
         attempt.setCustomerMessage(decision.customerMessage());
+        attempt.setUpliftSegment(segment);
 
         boolean success = executeReceivable(receivable, decision, attempt);
         trace.add("EXECUTION", "MockNotificationService.execute(Receivable#" + receivable.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());

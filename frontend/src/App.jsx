@@ -7,7 +7,7 @@ import ActionBreakdownChart from './components/ActionBreakdownChart';
 import AttemptTable from './components/AttemptTable';
 import TransactionModal from './components/TransactionModal';
 import PendingReview from './components/PendingReview';
-import { fetchMetrics, fetchDashboardSummary, fetchHeldOutMetrics, runBatch, runBatchStream, exportCsv } from './api';
+import { fetchMetrics, fetchDashboardSummary, fetchHeldOutMetrics, runBatch, runBatchStream, exportCsv, fetchUplift } from './api';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 
@@ -104,6 +104,7 @@ export default function App() {
   const [simResult, setSimResult] = useState(null);
   const [simLoading, setSimLoading] = useState(false);
   const [heldOutMetrics, setHeldOutMetrics] = useState(null);
+  const [upliftData, setUpliftData] = useState(null);
 
   useEffect(() => { if (boundsConfig) setSettingsLocal(boundsConfig); }, [boundsConfig]);
 
@@ -123,9 +124,9 @@ export default function App() {
   /** Single round-trip: loads metrics + funnel + actions + efficiency. */
   const loadDashboard = useCallback(async () => {
     try {
-      const [d, h] = await Promise.all([fetchDashboardSummary(), fetchHeldOutMetrics()]);
+      const [d, h, u] = await Promise.all([fetchDashboardSummary(), fetchHeldOutMetrics(), fetchUplift().catch(() => null)]);
       setMetrics(d.metrics); setFunnelData(d.funnel); setActionData(d.actions); setEfficiencyData(d.efficiency);
-      setHeldOutMetrics(h);
+      setHeldOutMetrics(h); setUpliftData(u);
       setLastUpdated(new Date()); setError(null); setRetryCount(0);
     } catch (e) {
       if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadDashboard(); }, 2000);
@@ -584,6 +585,54 @@ export default function App() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Uplift Analysis */}
+      {upliftData && (
+        <div className="card" style={{ marginBottom: 16, ...FW }}>
+          <div className="section-title" style={{ marginBottom: 4 }}>UPLIFT ANALYSIS — CONTROL vs TREATMENT</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>
+            A held-out control group (no agent intervention) establishes the natural-recovery baseline.
+            The delta shows how much each segment improves with agent intervention.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 16 }}>
+            <SummaryStat label="CONTROL RECOVERY RATE" value={upliftData.controlRecoveryRate != null ? `${upliftData.controlRecoveryRate.toFixed(1)}%` : '—'} color="var(--text-secondary)" tooltip="What recovery looks like with zero agent involvement" />
+            <SummaryStat label="CONTROL RECOVERED" value={upliftData.controlRecovered ?? '—'} color="var(--text-secondary)" />
+            <SummaryStat label="CONTROL TOTAL" value={upliftData.controlTotal ?? '—'} color="var(--text-secondary)" />
+          </div>
+          {upliftData.bySegment && (
+            <div className="table-scroll">
+              <table className="main-table">
+                <thead>
+                  <tr>
+                    <th>SEGMENT</th>
+                    <th style={{ textAlign: 'right' }}>CONTROL RECOVERY</th>
+                    <th style={{ textAlign: 'right' }}>TREATMENT RECOVERY</th>
+                    <th style={{ textAlign: 'right' }}>UPLIFT (Δ)</th>
+                    <th style={{ textAlign: 'right' }}>CONTROL TOTAL</th>
+                    <th style={{ textAlign: 'right' }}>TREATMENT TOTAL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.values(upliftData.bySegment).map(seg => (
+                    <tr key={seg.segment}>
+                      <td style={{ fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap' }}>{seg.segment}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--text-secondary)' }}>{seg.controlRate != null ? `${seg.controlRate.toFixed(1)}%` : '—'}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--green)', fontWeight: 600 }}>{seg.treatmentRate != null ? `${seg.treatmentRate.toFixed(1)}%` : '—'}</td>
+                      <td style={{ textAlign: 'right' }}>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 14, color: seg.delta > 0 ? 'var(--green)' : seg.delta < 0 ? 'var(--red)' : 'var(--text-muted)' }}>
+                          {seg.delta != null ? `${seg.delta > 0 ? '+' : ''}${seg.delta.toFixed(1)}pp` : '—'}
+                        </span>
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--text-muted)' }}>{seg.controlTotal ?? '—'}</td>
+                      <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--text-muted)' }}>{seg.treatmentTotal ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </>);

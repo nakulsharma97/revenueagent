@@ -55,6 +55,12 @@ public class MetricsController {
         return metricsService.actionEfficiency();
     }
 
+    /** Uplift analysis: control group vs treatment, per segment. */
+    @GetMapping("/uplift")
+    public UpliftReport uplift() {
+        return metricsService.upliftReport();
+    }
+
     /**
      * What-if simulator: projects net-recovered impact of bounds changes
      * against the current batch's already-recorded outcomes.

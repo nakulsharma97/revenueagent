@@ -50,6 +50,9 @@ public class Receivable {
     /** True for entities in the held-out evaluation split (never used by the agent). */
     private boolean isHeldOut;
 
+    /** True for control group entities — receive NO intervention, monitored for natural recovery. */
+    private boolean isControlGroup;
+
     // ── Promise-to-pay tracking ──
 
     /** Date the customer promised to pay by. Null if no promise has been made. */

@@ -173,6 +173,7 @@ public class DataSeeder implements CommandLineRunner {
             tx.setCreatedAt(LocalDateTime.now().minusHours(random.nextInt(72)));
             tx.setEventId("pay_evt_" + (1000 + i));
             tx.setHeldOut(random.nextDouble() < 0.20);
+            tx.setControlGroup(random.nextDouble() < 0.15); // ~15% control group for uplift measurement
             transactionRepository.save(tx);
         }
     }
@@ -196,6 +197,7 @@ public class DataSeeder implements CommandLineRunner {
             session.setReminderCount(0);
             session.setEventId("chk_sess_" + (3000 + i));
             session.setHeldOut(random.nextDouble() < 0.20);
+            session.setControlGroup(random.nextDouble() < 0.15);
             checkoutSessionRepository.save(session);
         }
     }
@@ -219,6 +221,7 @@ public class DataSeeder implements CommandLineRunner {
             receivable.setReminderCount(0);
             receivable.setEventId("inv_" + receivable.getInvoiceNumber() + "_" + receivable.getDueDate());
             receivable.setHeldOut(random.nextDouble() < 0.20);
+            receivable.setControlGroup(random.nextDouble() < 0.15);
 
             // ~30% of receivables get a promise-to-pay with various statuses
             if (random.nextDouble() < 0.30) {

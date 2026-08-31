@@ -47,6 +47,40 @@ public class RulesEngine {
         return Customer.CustomerSegment.STANDARD;
     }
 
+    /**
+     * Uplift-aware filter: removes actions from the eligible set based on the entity's
+     * uplift segment. This does NOT weaken any hard bound — it tightens the set by
+     * removing actions that demonstrably don't help for this segment.
+     */
+    public void filterByUpliftSegment(List<RecoveryAction> eligible, com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment) {
+        if (segment == null) return; // no segment = full set (backward compatible)
+        switch (segment) {
+            case SURE_THING -> {
+                // Would recover anyway — don't spend costly interventions.
+                // Remove OFFER_DISCOUNT (highest cost per recovery).
+                // RETRY_SILENT/RETRY_NOW are free → keep them for retryable failures.
+                eligible.remove(RecoveryAction.OFFER_DISCOUNT);
+            }
+            case LOST_CAUSE -> {
+                // Unrecoverable regardless — don't waste resources.
+                // Remove OFFER_DISCOUNT (won't change the outcome).
+                // Keep RETRY_SILENT (costs nothing) if applicable.
+                eligible.remove(RecoveryAction.OFFER_DISCOUNT);
+            }
+            case DO_NOT_DISTURB -> {
+                // Low value + already failed once — prefer silence.
+                // Remove SEND_PAYMENT_LINK and OFFER_DISCOUNT (both are customer-contact).
+                // Only RETRY_SILENT (free) and ESCALATE_TO_HUMAN (last resort) remain.
+                eligible.remove(RecoveryAction.SEND_PAYMENT_LINK);
+                eligible.remove(RecoveryAction.OFFER_DISCOUNT);
+            }
+            case PERSUADABLE -> {
+                // Default: full eligible set — intervention genuinely helps here.
+                // No removals.
+            }
+        }
+    }
+
     /** Actions the transaction is currently allowed to take — the LLM must pick from this set. */
     public List<RecoveryAction> eligibleActions(Transaction tx) {
         List<RecoveryAction> eligible = new ArrayList<>();

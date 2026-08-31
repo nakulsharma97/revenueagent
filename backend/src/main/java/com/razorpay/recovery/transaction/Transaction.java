@@ -52,6 +52,9 @@ public class Transaction {
     /** True for entities in the held-out evaluation split (never used by the agent). */
     private boolean isHeldOut;
 
+    /** True for control group entities — receive NO intervention, monitored for natural recovery. */
+    private boolean isControlGroup;
+
     private LocalDateTime createdAt;
     private LocalDateTime lastAttemptAt;
 
