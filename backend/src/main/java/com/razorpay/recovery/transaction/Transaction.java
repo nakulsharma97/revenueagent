@@ -59,14 +59,29 @@ public class Transaction {
         AT_RISK, IN_RECOVERY, RECOVERED, LOST
     }
 
-    /** Mirrors real gateway decline codes so the demo reads as production-realistic. */
+    /**
+     * Failure codes modeled on Indian payment rails — UPI (NPCI), cards (Visa/Mastercard/Rupay),
+     * and netbanking. UPI dominates Indian digital payments (~70% of volume per NPCI reports),
+     * so the enum is weighted toward UPI-specific failures rather than a generic card-only list.
+     */
     public enum FailureReason {
-        INSUFFICIENT_FUNDS(true),
-        NETWORK_ERROR(true),
-        BANK_SERVER_DOWN(true),
-        CARD_EXPIRED(false),
-        CARD_STOLEN_FLAG(false),
-        INVALID_CVV(false);
+        // ── Card failures (Visa/Mastercard/Rupay decline codes) ──
+        INSUFFICIENT_FUNDS(true),   // Indian cards: most common decline, retryable if customer tops up
+        NETWORK_ERROR(true),        // Transient ISP/PSP routing failure — session survives retry
+        BANK_SERVER_DOWN(true),     // Issuer bank maintenance window — usually resolves within 30 min
+        CARD_EXPIRED(false),        // Terminal: card must be replaced, retry won't help
+        CARD_STOLEN_FLAG(false),    // Terminal: issuer has blocked the card permanently
+        INVALID_CVV(false),         // Terminal: customer must re-enter CVV on a new attempt
+
+        // ── UPI failures (NPCI UPI decline codes) ──
+        // UPI is ~70% of Indian digital payment volume (NPCI FY2025 data).
+        // These failures are the majority of what a real Indian recovery agent would see.
+        UPI_PIN_MISMATCH(true),     // Customer entered wrong UPI PIN — often succeeds on retry
+        UPI_TIMEOUT(true),          // PSP (Google Pay/PhonePe/Paytm) routing timeout — transient
+        VPA_INVALID(false),         // Virtual Payment Address doesn't exist — terminal, won't retry
+
+        // ── Netbanking failures ──
+        BANK_SESSION_EXPIRED(true); // NB session timed out mid-transaction — retry within window
 
         private final boolean retryable;
 

@@ -29,7 +29,7 @@ public class RecoveryController {
         this.attemptRepository = attemptRepository;
     }
 
-    /** Kicks off the full detect -> diagnose -> decide -> execute loop across all at-risk transactions. */
+    /** Blocking batch: processes all items and returns the full result list. Used by tests and fallback. */
     @PostMapping("/run-batch")
     public List<RecoveryAttempt> runBatch() {
         return orchestrator.runBatch();
@@ -76,7 +76,7 @@ public class RecoveryController {
         return receivableRepository.findAll();
     }
 
-    /** Returns the structured decision trace for a specific attempt. */
+    /** The full DETECTION→ELIGIBILITY→PROPOSAL→BOUNDS_CHECK→EXECUTION trace for one attempt. */
     @GetMapping("/attempts/{id}/trace")
     public DecisionTrace attemptTrace(@PathVariable Long id) {
         RecoveryAttempt attempt = attemptRepository.findById(id)

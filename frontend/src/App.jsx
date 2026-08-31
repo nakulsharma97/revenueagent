@@ -117,7 +117,7 @@ export default function App() {
 
   const loadMetrics = useCallback(async () => {
     try { const m = await fetchMetrics(); setMetrics(m); setLastUpdated(new Date()); setError(null); setRetryCount(0); }
-    catch (e) { if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadMetrics(); }, 2000); else setError('Backend not reachable. Start the Spring Boot app on :8080, then reload.'); }
+    catch (e) { if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadMetrics(); }, 2000); else setError('Cannot reach the recovery engine on :8080 — make sure the Spring Boot backend is running, then refresh.'); }
   }, [retryCount]);
 
   /** Single round-trip: loads metrics + funnel + actions + efficiency. */
@@ -129,7 +129,7 @@ export default function App() {
       setLastUpdated(new Date()); setError(null); setRetryCount(0);
     } catch (e) {
       if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadDashboard(); }, 2000);
-      else setError('Backend not reachable. Start the Spring Boot app on :8080, then reload.');
+      else setError('Cannot reach the recovery engine on :8080 — make sure the Spring Boot backend is running, then refresh.');
     }
   }, [retryCount]);
 
@@ -206,7 +206,7 @@ export default function App() {
       setError(null);
     } catch (e) {
       if (e.message?.includes('409') || e.message?.includes('already running')) {
-        setError('Batch already running — wait for the current batch to complete.');
+        setError('A recovery batch is already in progress — wait for it to finish before starting another.');
       } else if (e.message?.includes('SSE') || e.message?.includes('Failed to fetch')) {
         // SSE failed, fall back to blocking POST
         try {
@@ -221,7 +221,7 @@ export default function App() {
           setError(fallbackErr.message?.includes('409') ? 'Batch already running — wait for the current batch to complete.' : 'Batch run failed — check the backend logs.');
         }
       } else {
-        setError('Batch run failed — check the backend logs.');
+        setError('Recovery batch failed — check the backend console for details.');
       }
     } finally {
       if (window.__batchES) { try { window.__batchES.close(); } catch (_) {} window.__batchES = null; }

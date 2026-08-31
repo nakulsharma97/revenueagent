@@ -29,7 +29,12 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Metrics across all three revenue sources: payment failures, checkout abandonment, receivables.
+ * Computes every number the dashboard shows — recovery rate, net revenue, per-action ROI,
+ * funnel distribution, and the held-out evaluation split.
+ *
+ * Every method here queries the full entity tables (not cached) because metrics must
+ * reflect the latest batch state. The dashboard endpoint bundles all of these into a
+ * single round-trip to avoid the waterfall the original implementation had.
  */
 @Service
 public class MetricsService {
@@ -49,7 +54,7 @@ public class MetricsService {
         this.attemptRepository = attemptRepository;
     }
 
-    /** Combined dashboard payload — single round-trip for initial page load. */
+    /** Single round-trip payload: metrics + held-out metrics + funnel + actions + efficiency. */
     public DashboardSummary dashboardSummary() {
         return new DashboardSummary(
                 currentMetrics(),
@@ -60,7 +65,7 @@ public class MetricsService {
         );
     }
 
-    /** Full-batch metrics (heldOutOnly=false by default). */
+    /** Convenience overload: full-batch metrics (heldOutOnly=false). */
     public BatchMetrics currentMetrics() {
         return currentMetrics(false);
     }
@@ -175,13 +180,21 @@ public class MetricsService {
         long count = 0;
         BigDecimal total = BigDecimal.ZERO;
 
-        // Payment failures baseline
+        // Payment failures baseline: simple retry-once naive strategy.
+        // Probabilities mirror the mock gateway but applied once (no intelligence).
         for (Transaction tx : txs) {
             double prob = switch (tx.getFailureReason()) {
+                // Card failures
                 case NETWORK_ERROR -> 0.75;
                 case BANK_SERVER_DOWN -> 0.6;
                 case INSUFFICIENT_FUNDS -> 0.35;
                 case CARD_EXPIRED, INVALID_CVV, CARD_STOLEN_FLAG -> 0.02;
+                // UPI failures (new)
+                case UPI_PIN_MISMATCH -> 0.40;
+                case UPI_TIMEOUT -> 0.55;
+                case VPA_INVALID -> 0.05;
+                // Netbanking failures (new)
+                case BANK_SESSION_EXPIRED -> 0.30;
             };
             double adjusted = Math.min(0.95, prob
                     + (tx.getSubscription().getCustomer().getPaymentReliabilityScore() - 0.5) * 0.2);

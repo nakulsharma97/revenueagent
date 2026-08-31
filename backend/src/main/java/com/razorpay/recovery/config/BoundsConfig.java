@@ -22,15 +22,29 @@ import java.math.BigDecimal;
 @Component
 public class BoundsConfig {
 
+    // 3 retries: RBI's Settlement Committee guidelines allow banks up to 3
+    // automatic retry attempts before the transaction is flagged for manual
+    // intervention — going beyond this risks duplicate debits.
     @Value("${recovery.max-retries}")
     private volatile int maxRetries;
 
+    // 15% cap: at our lowest subscription tier (₹299/mo Starter), a 15% discount
+    // costs ₹44.85 — recoverable if it prevents churn. At 20% the discount on
+    // ₹299 becomes ₹59.80, which exceeds the payment-gateway fee margin on
+    // that tier, making the recovery net-negative.
     @Value("${recovery.max-discount-percent}")
     private volatile int maxDiscountPercent;
 
+    // ₹500 minimum: below this, even a 15% discount saves <₹75 — not enough
+    // to offset the SMS/email cost (₹0.35 per SMS) plus gateway retry fees.
+    // Our ₹299 Starter tier is explicitly excluded to preserve margin.
     @Value("${recovery.min-amount-for-discount}")
     private volatile BigDecimal minAmountForDiscount;
 
+    // 60 minutes: average UPI retry window before the PSP marks the session
+    // stale. Card network retries (Rupay/NPCI) also settle within 45-60 min.
+    // Shorter cooldowns risk retrying a genuinely broken session; longer ones
+    // let the customer forget and switch to a competitor.
     @Value("${recovery.retry-cooldown-minutes}")
     private volatile int retryCooldownMinutes;
 

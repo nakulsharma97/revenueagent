@@ -35,7 +35,7 @@ export default function PendingReview({ forceShow, onResolved }) {
 
   if (loading) return (
     <div className="card" style={{ padding: '16px 20px', width: '100%', minWidth: 0 }}>
-      <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)' }}>Loading pending review queue…</div>
+      <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)' }}>Fetching items that need human sign-off…</div>
     </div>
   );
 

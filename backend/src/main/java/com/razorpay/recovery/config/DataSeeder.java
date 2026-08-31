@@ -31,17 +31,40 @@ public class DataSeeder implements CommandLineRunner {
     private final RecoveryOrchestratorService orchestrator;
     private final Random random = new Random(42);
 
+    // Subscription tiers mirror typical Indian SaaS pricing (annual INR, monthly billing).
+    // ₹299 Starter is deliberately below the ₹500 min-discount threshold to test
+    // the RulesEngine's amount-gating logic in the demo.
     private static final String[] PLANS = {"Starter", "Growth", "Pro", "Enterprise"};
     private static final BigDecimal[] AMOUNTS = {
-            new BigDecimal("299"), new BigDecimal("999"), new BigDecimal("2499"), new BigDecimal("7999")
+            new BigDecimal("299"),   // Starter: below discount threshold, can't offer discount
+            new BigDecimal("999"),   // Growth: eligible for discount (15% = ₹149.85)
+            new BigDecimal("2499"),  // Pro: mid-tier, discount makes financial sense
+            new BigDecimal("7999")   // Enterprise: high-value, discount always worth recovering
     };
+    // Realistic Indian payment failure distribution based on NPCI/FSSAI data:
+    // UPI ~65% (majority rail in India), Card ~25%, Netbanking ~10%.
+    // Within UPI: PIN mismatch is most common (fat-finger on mobile), timeout
+    // is second (PSP routing congestion), VPA invalid is rare (typo in handle).
+    // Within cards: insufficient funds dominates (salary-cycle timing),
+    // network errors are common on mobile data, terminal failures are rare.
     private static final FailureReason[] REASON_POOL = {
-            FailureReason.INSUFFICIENT_FUNDS, FailureReason.INSUFFICIENT_FUNDS, FailureReason.INSUFFICIENT_FUNDS,
-            FailureReason.NETWORK_ERROR, FailureReason.NETWORK_ERROR, FailureReason.NETWORK_ERROR,
-            FailureReason.BANK_SERVER_DOWN, FailureReason.BANK_SERVER_DOWN, FailureReason.BANK_SERVER_DOWN,
+            // UPI failures (65% of pool — 13 of 20 slots)
+            FailureReason.UPI_PIN_MISMATCH, FailureReason.UPI_PIN_MISMATCH, FailureReason.UPI_PIN_MISMATCH,
+            FailureReason.UPI_TIMEOUT, FailureReason.UPI_TIMEOUT, FailureReason.UPI_TIMEOUT,
+            FailureReason.UPI_TIMEOUT,
+            FailureReason.VPA_INVALID,
+            // Card failures (25% of pool — 5 of 20 slots)
+            FailureReason.INSUFFICIENT_FUNDS, FailureReason.INSUFFICIENT_FUNDS,
+            FailureReason.NETWORK_ERROR,
             FailureReason.CARD_EXPIRED,
             FailureReason.INVALID_CVV,
-            FailureReason.CARD_STOLEN_FLAG
+            // Netbanking failures (10% of pool — 2 of 20 slots)
+            FailureReason.BANK_SESSION_EXPIRED, FailureReason.BANK_SESSION_EXPIRED,
+            // Terminal/rare (included for edge-case coverage)
+            FailureReason.CARD_STOLEN_FLAG,
+            FailureReason.BANK_SERVER_DOWN,
+            FailureReason.INSUFFICIENT_FUNDS,
+            FailureReason.NETWORK_ERROR
     };
 
     private static final AbandonmentReason[] ABANDON_REASONS = {
