@@ -56,6 +56,7 @@ public class MetricsService {
     }
 
     /** Single round-trip payload: metrics + held-out metrics + funnel + actions + efficiency. */
+    @Transactional(readOnly = true)
     public DashboardSummary dashboardSummary() {
         return new DashboardSummary(
                 currentMetrics(),
