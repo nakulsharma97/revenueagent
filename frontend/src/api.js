@@ -13,6 +13,12 @@ export async function fetchMetrics() {
   return res.json();
 }
 
+export async function fetchHeldOutMetrics() {
+  const res = await fetch(`${API_BASE}/api/metrics?scope=held-out`);
+  if (!res.ok) throw new Error('held-out metrics fetch failed');
+  return res.json();
+}
+
 export async function fetchFunnel() {
   const res = await fetch(`${API_BASE}/api/metrics/funnel`);
   if (!res.ok) throw new Error('funnel fetch failed');
@@ -40,9 +46,12 @@ export async function runBatch() {
   return res.json();
 }
 
-/** Streaming batch: yields each attempt as it completes via SSE. */
-export function runBatchStream(onAttempt, onDone) {
+/** Streaming batch: yields total count first, then each attempt as it completes via SSE. */
+export function runBatchStream(onAttempt, onDone, onTotal) {
   const es = new EventSource(`${API_BASE}/api/recovery/run-batch/stream`);
+  es.addEventListener('total', (e) => {
+    if (onTotal) onTotal(parseInt(e.data));
+  });
   es.addEventListener('attempt', (e) => {
     onAttempt(JSON.parse(e.data));
   });

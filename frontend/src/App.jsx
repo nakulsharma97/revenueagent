@@ -7,7 +7,7 @@ import ActionBreakdownChart from './components/ActionBreakdownChart';
 import AttemptTable from './components/AttemptTable';
 import TransactionModal from './components/TransactionModal';
 import PendingReview from './components/PendingReview';
-import { fetchMetrics, fetchDashboardSummary, runBatch, exportCsv } from './api';
+import { fetchMetrics, fetchDashboardSummary, fetchHeldOutMetrics, runBatch, runBatchStream, exportCsv } from './api';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 
@@ -103,6 +103,7 @@ export default function App() {
   const [allReceivables, setAllReceivables] = useState([]);
   const [simResult, setSimResult] = useState(null);
   const [simLoading, setSimLoading] = useState(false);
+  const [heldOutMetrics, setHeldOutMetrics] = useState(null);
 
   useEffect(() => { if (boundsConfig) setSettingsLocal(boundsConfig); }, [boundsConfig]);
 
@@ -122,8 +123,9 @@ export default function App() {
   /** Single round-trip: loads metrics + funnel + actions + efficiency. */
   const loadDashboard = useCallback(async () => {
     try {
-      const d = await fetchDashboardSummary();
+      const [d, h] = await Promise.all([fetchDashboardSummary(), fetchHeldOutMetrics()]);
       setMetrics(d.metrics); setFunnelData(d.funnel); setActionData(d.actions); setEfficiencyData(d.efficiency);
+      setHeldOutMetrics(h);
       setLastUpdated(new Date()); setError(null); setRetryCount(0);
     } catch (e) {
       if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadDashboard(); }, 2000);
@@ -166,15 +168,66 @@ export default function App() {
 
   async function handleRunBatch() {
     setLoading(true); setAttempts([]); setStreamCount(null);
-    setBatchProgress({ processed: 0, total: metrics?.totalAtRisk || 320, recoveredAmount: 0, startTime: Date.now() });
+    setBatchProgress({ processed: 0, total: 0, recoveredAmount: 0, startTime: Date.now() });
     try {
-      const result = await runBatch(); const reversed = result.reverse();
-      setAttempts(reversed); setStreamCount(result.length); setActionLog(result);
-      const finalRecovered = reversed.filter(a => a.outcome === 'SUCCESS').reduce((sum, a) => sum + (a.amountRecovered || 0), 0);
-      setBatchProgress(prev => prev ? { ...prev, processed: result.length, recoveredAmount: finalRecovered } : null);
-      await loadDashboard(); await loadReviewCount(); await loadActionLog(); setFunnelRefresh(n => n + 1); setError(null);
-    } catch (e) { setError(e.message?.includes('409') ? 'Batch already running — wait for the current batch to complete.' : 'Batch run failed — check the backend logs.'); }
-    finally { setLoading(false); setTimeout(() => setBatchProgress(null), 2000); }
+      // Use SSE streaming for real-time progress updates instead of blocking POST
+      const allAttempts = [];
+      const finalRecovered = { value: 0 };
+      await new Promise((resolve, reject) => {
+        const es = runBatchStream(
+          // onAttempt: called for each recovery attempt as it completes
+          (attempt) => {
+            allAttempts.push(attempt);
+            if (attempt.outcome === 'SUCCESS') finalRecovered.value += (attempt.amountRecovered || 0);
+            setAttempts([...allAttempts].reverse());
+            setStreamCount(allAttempts.length);
+            setActionLog([...allAttempts]);
+            setBatchProgress(prev => prev ? {
+              ...prev,
+              processed: allAttempts.length,
+              recoveredAmount: finalRecovered.value,
+            } : null);
+          },
+          // onDone: called when all attempts are processed
+          (count) => {
+            if (count === -1) reject(new Error('SSE connection failed'));
+            else resolve(count);
+          },
+          // onTotal: called first with the total eligible item count
+          (total) => {
+            setBatchProgress(prev => prev ? { ...prev, total } : { processed: 0, total, recoveredAmount: 0, startTime: Date.now() });
+          }
+        );
+        // Store EventSource ref for potential cleanup
+        window.__batchES = es;
+      });
+      // All data already streamed — just refresh dashboard metrics
+      await Promise.all([loadDashboard(), loadReviewCount(), loadActionLog()]);
+      setError(null);
+    } catch (e) {
+      if (e.message?.includes('409') || e.message?.includes('already running')) {
+        setError('Batch already running — wait for the current batch to complete.');
+      } else if (e.message?.includes('SSE') || e.message?.includes('Failed to fetch')) {
+        // SSE failed, fall back to blocking POST
+        try {
+          const result = await runBatch();
+          const reversed = result.reverse();
+          setAttempts(reversed); setStreamCount(result.length); setActionLog(result);
+          const finalRecovered = reversed.filter(a => a.outcome === 'SUCCESS').reduce((sum, a) => sum + (a.amountRecovered || 0), 0);
+          setBatchProgress(prev => prev ? { ...prev, processed: result.length, recoveredAmount: finalRecovered } : null);
+          await Promise.all([loadDashboard(), loadReviewCount(), loadActionLog()]);
+          setError(null);
+        } catch (fallbackErr) {
+          setError(fallbackErr.message?.includes('409') ? 'Batch already running — wait for the current batch to complete.' : 'Batch run failed — check the backend logs.');
+        }
+      } else {
+        setError('Batch run failed — check the backend logs.');
+      }
+    } finally {
+      if (window.__batchES) { try { window.__batchES.close(); } catch (_) {} window.__batchES = null; }
+      setLoading(false);
+      setTimeout(() => setBatchProgress(null), 5000);
+    }
   }
 
   function fmt(v) { return v === null || v === undefined ? '—' : `₹${Number(v).toLocaleString('en-IN')}`; }
@@ -420,6 +473,31 @@ export default function App() {
         <SummaryStat label="BASELINE" value={fmt(metrics?.baselineNetRecovered)} />
         <SummaryStat label="PROMISE KEEP RATE" value={metrics ? `${metrics.promiseKeepRate ?? 0}%` : '—'} color="var(--green)" />
       </div>
+
+      {/* Held-out evaluation split */}
+      {heldOutMetrics && (
+        <div className="card" style={{ marginBottom: 16, ...FW }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <div className="section-title" style={{ marginBottom: 0 }}>HELD-OUT EVALUATION — UNSEEN DATA (20% split, never used to tune the agent)</div>
+          </div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>These metrics are computed over the held-out subset only — data the agent has never seen. This is the credible claim of real-world performance.</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+            <SummaryStat label="HELD-OUT ITEMS" value={heldOutMetrics.totalAtRisk ?? '—'} color="var(--text)" />
+            <SummaryStat label="HELD-OUT RECOVERED" value={heldOutMetrics.recoveredCount ?? '—'} color="var(--green)" />
+            <SummaryStat label="HELD-OUT RECOVERY RATE" value={heldOutMetrics ? pct(heldOutMetrics.recoveryRatePercent) : '—'} color="var(--gold)" />
+            <SummaryStat label="HELD-OUT NET REVENUE" value={fmt(heldOutMetrics?.netRecovered)} color="var(--gold-bright)" />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginTop: 12 }}>
+            {heldOutMetrics?.bySource && Object.entries(heldOutMetrics.bySource).map(([key, src]) => (
+              <div key={key} style={{ padding: '10px 12px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+                <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.04em', marginBottom: 6 }}>{src.label}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 700, color: 'var(--text)' }}>{src.atRisk}</span><span style={{ fontSize: 11, color: 'var(--text-muted)' }}>at risk</span></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}><span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>{src.recovered}</span><span style={{ fontSize: 11, color: 'var(--text-muted)' }}>recovered</span></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="card" style={{ marginBottom: 16, ...FW }}>
         <div className="section-title" style={{ marginBottom: 12 }}>RECOVERY BY SOURCE</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
@@ -665,6 +743,27 @@ export default function App() {
           </div>
           {lastUpdated && <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Last updated: {lastUpdated.toLocaleTimeString()} · 🔄</span>}
         </div>
+
+        {/* Batch progress bar */}
+        {batchProgress && (
+          <div style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '12px 28px', flexShrink: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{loading ? 'Processing batch...' : 'Batch complete'}</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>{batchProgress.processed}/{batchProgress.total} items</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {batchProgress.recoveredAmount > 0 && (
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: 'var(--green)' }}>Recovered {fmt(batchProgress.recoveredAmount)}</span>
+                )}
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>{batchProgress.total > 0 ? Math.round((batchProgress.processed / batchProgress.total) * 100) : 0}%</span>
+              </div>
+            </div>
+            <div style={{ width: '100%', height: 4, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ width: `${batchProgress.total > 0 ? (batchProgress.processed / batchProgress.total) * 100 : 0}%`, height: '100%', background: loading ? 'var(--gold)' : 'var(--green)', borderRadius: 2, transition: 'width 0.3s ease' }} />
+            </div>
+          </div>
+        )}
 
         <main style={{ padding: '24px 28px', flex: 1, minWidth: 0, width: '100%' }}>
           {error && (<div className="animate-in" style={{ background: 'var(--red-bg)', border: '1px solid var(--red-border)', borderRadius: 'var(--radius-sm)', color: 'var(--red)', padding: '12px 16px', fontSize: 13, fontWeight: 500, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>

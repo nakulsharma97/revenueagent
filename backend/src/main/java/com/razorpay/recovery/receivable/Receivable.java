@@ -38,6 +38,18 @@ public class Receivable {
     private int reminderCount = 0;
     private int paymentPlanInstallments = 0;
 
+    /**
+     * Idempotency key — unique externally-meaningful identifier (invoice number + due-date).
+     * The UNIQUE database constraint on this field is the guarantee-of-last-resort against
+     * duplicate processing; the orchestrator also checks for an existing SUCCESS attempt
+     * before executing any action.
+     */
+    @Column(unique = true, length = 128)
+    private String eventId;
+
+    /** True for entities in the held-out evaluation split (never used by the agent). */
+    private boolean isHeldOut;
+
     // ── Promise-to-pay tracking ──
 
     /** Date the customer promised to pay by. Null if no promise has been made. */

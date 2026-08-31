@@ -53,39 +53,70 @@ public class MetricsService {
     public DashboardSummary dashboardSummary() {
         return new DashboardSummary(
                 currentMetrics(),
+                currentMetrics(true),
                 funnelData(),
                 actionBreakdown(),
                 actionEfficiency()
         );
     }
 
+    /** Full-batch metrics (heldOutOnly=false by default). */
     public BatchMetrics currentMetrics() {
+        return currentMetrics(false);
+    }
+
+    /**
+     * Compute metrics over either the full batch or the held-out subset.
+     * When heldOutOnly=true, only entities where isHeldOut=true (and their corresponding
+     * recovery attempts) are included — this is the held-out evaluation split.
+     */
+    public BatchMetrics currentMetrics(boolean heldOutOnly) {
         List<Transaction> allTx = transactionRepository.findAll();
         List<CheckoutSession> allSessions = checkoutSessionRepository.findAll();
         List<Receivable> allReceivables = receivableRepository.findAll();
         List<RecoveryAttempt> attempts = attemptRepository.findAll();
 
+        if (heldOutOnly) {
+            allTx = allTx.stream().filter(Transaction::isHeldOut).toList();
+            allSessions = allSessions.stream().filter(CheckoutSession::isHeldOut).toList();
+            allReceivables = allReceivables.stream().filter(Receivable::isHeldOut).toList();
+            // Filter attempts to only those whose source entity is held-out
+            Set<Long> heldTxIds = allTx.stream().map(Transaction::getId).collect(Collectors.toSet());
+            Set<Long> heldSessionIds = allSessions.stream().map(CheckoutSession::getId).collect(Collectors.toSet());
+            Set<Long> heldReceivableIds = allReceivables.stream().map(Receivable::getId).collect(Collectors.toSet());
+            attempts = attempts.stream().filter(a -> {
+                if (a.getSourceType() == SourceType.PAYMENT && a.getTransaction() != null)
+                    return heldTxIds.contains(a.getTransaction().getId());
+                if (a.getSourceType() == SourceType.CHECKOUT && a.getCheckoutSession() != null)
+                    return heldSessionIds.contains(a.getCheckoutSession().getId());
+                if (a.getSourceType() == SourceType.RECEIVABLE && a.getReceivable() != null)
+                    return heldReceivableIds.contains(a.getReceivable().getId());
+                return false;
+            }).toList();
+        }
+
+        List<RecoveryAttempt> finalAttempts = attempts;
         long totalAtRisk = allTx.size() + allSessions.size() + allReceivables.size();
 
         long paymentAtRisk = allTx.size();
         long checkoutAtRisk = allSessions.size();
         long receivableAtRisk = allReceivables.size();
 
-        long recoveredCount = attempts.stream()
+        long recoveredCount = finalAttempts.stream()
                 .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
-        long paymentRecovered = attempts.stream()
+        long paymentRecovered = finalAttempts.stream()
                 .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS && a.getSourceType() == SourceType.PAYMENT).count();
-        long checkoutRecovered = attempts.stream()
+        long checkoutRecovered = finalAttempts.stream()
                 .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS && a.getSourceType() == SourceType.CHECKOUT).count();
-        long receivableRecovered = attempts.stream()
+        long receivableRecovered = finalAttempts.stream()
                 .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS && a.getSourceType() == SourceType.RECEIVABLE).count();
 
-        BigDecimal revenueRecovered = attempts.stream()
+        BigDecimal revenueRecovered = finalAttempts.stream()
                 .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS)
                 .map(RecoveryAttempt::getAmountRecovered)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        BigDecimal interventionCost = attempts.stream()
+        BigDecimal interventionCost = finalAttempts.stream()
                 .map(RecoveryAttempt::getInterventionCost)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 

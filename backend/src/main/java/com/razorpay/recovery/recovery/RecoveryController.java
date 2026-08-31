@@ -35,19 +35,28 @@ public class RecoveryController {
         return orchestrator.runBatch();
     }
 
-    /** Streaming batch: emits each recovery attempt as an SSE event as it completes. */
+    /** Streaming batch: emits 'total' first, then attempts per-source for incremental progress. */
     @GetMapping(value = "/run-batch/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter runBatchStream() {
         SseEmitter emitter = new SseEmitter(300_000L); // 5 min timeout
         new Thread(() -> {
             try {
-                List<RecoveryAttempt> results = orchestrator.runBatch();
-                for (RecoveryAttempt attempt : results) {
-                    emitter.send(SseEmitter.event()
-                            .name("attempt")
-                            .data(attempt));
-                }
-                emitter.send(SseEmitter.event().name("done").data(results.size()));
+                // 1. Count eligible items and send 'total' so the frontend progress bar is accurate
+                int total = orchestrator.countEligible();
+                emitter.send(SseEmitter.event().name("total").data(total));
+
+                // 2. Run batch with per-item callback — events emitted after EACH item
+                List<RecoveryAttempt> allResults = orchestrator.runBatchWithCallback(attempt -> {
+                    try {
+                        emitter.send(SseEmitter.event().name("attempt").data(attempt));
+                    } catch (Exception e) {
+                        org.slf4j.LoggerFactory.getLogger(RecoveryController.class)
+                                .error("SSE send failed", e);
+                    }
+                });
+
+                // 3. Signal completion
+                emitter.send(SseEmitter.event().name("done").data(allResults.size()));
                 emitter.complete();
             } catch (Exception e) {
                 emitter.completeWithError(e);

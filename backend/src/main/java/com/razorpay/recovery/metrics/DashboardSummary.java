@@ -9,6 +9,7 @@ import java.util.List;
  */
 public record DashboardSummary(
         BatchMetrics metrics,
+        BatchMetrics heldOutMetrics,
         FunnelData funnel,
         List<ActionBreakdown> actions,
         List<ActionEfficiency> efficiency

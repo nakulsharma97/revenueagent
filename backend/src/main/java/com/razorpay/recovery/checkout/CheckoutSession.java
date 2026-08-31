@@ -38,6 +38,18 @@ public class CheckoutSession {
 
     private int reminderCount = 0;
 
+    /**
+     * Idempotency key — unique externally-meaningful identifier (e.g. session ID).
+     * The UNIQUE database constraint on this field is the guarantee-of-last-resort against
+     * duplicate processing; the orchestrator also checks for an existing SUCCESS attempt
+     * before executing any action.
+     */
+    @Column(unique = true, length = 128)
+    private String eventId;
+
+    /** True for entities in the held-out evaluation split (never used by the agent). */
+    private boolean isHeldOut;
+
     public enum CheckoutStatus {
         IN_PROGRESS, ABANDONED, RECOVERED, LOST
     }

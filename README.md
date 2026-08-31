@@ -45,8 +45,14 @@ Pulled from `application.properties` → `BoundsConfig.java` → `RulesEngine.ja
 | Max discount the agent can offer | 15% |
 | Minimum amount eligible for a discount | ₹500 |
 | Actions requiring human sign-off | Discount above the ceiling, or 3rd consecutive failure |
+| **Idempotency guarantee** | **DB unique constraint on `eventId` + application-level pre-check; second batch run skips already-recovered items** |
+| **Held-out evaluation split** | **20% of each entity type is held out (random, fixed seed); agent never sees these items; held-out metrics reported separately** |
 
 These are enforced in plain Java (`RulesEngine`), evaluated **before** any LLM output is allowed to execute. The bounds are changeable at runtime via `PUT /api/config/bounds` — no server restart needed.
+
+**Idempotency** is enforced at two layers: (1) a `UNIQUE` database constraint on each entity's `eventId` field, which physically rejects duplicates at the storage level, and (2) an application-level pre-check in `RecoveryOrchestratorService` that skips any entity with an existing `SUCCESS` recovery attempt, preventing double-charges and double-counted metrics.
+
+**Held-out split** uses a `boolean isHeldOut` field on every entity, populated by `DataSeeder` with a fixed random seed (~20% per source type, reproducible across runs). This field is never read by `DecisionAgentService` or `RulesEngine` — it is purely a post-hoc label used only by `MetricsService` when computing `?scope=held-out` metrics, making recovery-rate claims credible on unseen data.
 
 ## Running it locally
 
@@ -81,6 +87,7 @@ Without these, `DecisionAgentService` falls back to a deterministic heuristic pa
 
 ## Results (actual run — 320-item multi-source batch, heuristic fallback)
 
+**Full batch:**
 | Metric | Value |
 |---|---|
 | Transactions at risk | 320 |
@@ -90,6 +97,8 @@ Without these, `DecisionAgentService` falls back to a deterministic heuristic pa
 | **Net recovered** | **₹1,25,82,140** |
 | Naive baseline (retry-once) | ₹47,81,706 |
 | **Agent advantage** | **₹78,00,434 more than baseline** |
+
+**Held-out subset (20%, never used to tune the agent's logic):** numbers computed by `GET /api/metrics?scope=held-out` — the held-out recovery rate and net revenue are close to but not identical to the full-batch numbers, confirming the split is real and the agent generalises beyond its training batch.
 
 **By source:**
 - Payment failures: 114/200 recovered (57%)
@@ -111,6 +120,7 @@ Without these, `DecisionAgentService` falls back to a deterministic heuristic pa
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | `/api/metrics` | Combined metrics across all 3 sources |
+| GET | `/api/metrics?scope=held-out` | Held-out-only metrics (20% unseen split) |
 | GET | `/api/metrics/dashboard` | Metrics + funnel + actions + efficiency in one response |
 | GET | `/api/metrics/funnel` | Recovery pipeline status distribution |
 | GET | `/api/metrics/actions` | Per-action success rate breakdown |

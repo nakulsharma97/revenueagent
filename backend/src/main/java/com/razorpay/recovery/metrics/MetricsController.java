@@ -23,8 +23,8 @@ public class MetricsController {
     }
 
     @GetMapping
-    public BatchMetrics metrics() {
-        return metricsService.currentMetrics();
+    public BatchMetrics metrics(@RequestParam(required = false, defaultValue = "full") String scope) {
+        return metricsService.currentMetrics("held-out".equals(scope));
     }
 
     /** Combined dashboard payload — single round-trip for initial page load. */

@@ -116,6 +116,8 @@ public class DataSeeder implements CommandLineRunner {
             tx.setFailureReason(REASON_POOL[random.nextInt(REASON_POOL.length)]);
             tx.setRetryCount(0);
             tx.setCreatedAt(LocalDateTime.now().minusHours(random.nextInt(72)));
+            tx.setEventId("pay_evt_" + (1000 + i));
+            tx.setHeldOut(random.nextDouble() < 0.20);
             transactionRepository.save(tx);
         }
     }
@@ -137,6 +139,8 @@ public class DataSeeder implements CommandLineRunner {
             session.setStatus(CheckoutStatus.ABANDONED);
             session.setAbandonmentReason(ABANDON_REASONS[random.nextInt(ABANDON_REASONS.length)]);
             session.setReminderCount(0);
+            session.setEventId("chk_sess_" + (3000 + i));
+            session.setHeldOut(random.nextDouble() < 0.20);
             checkoutSessionRepository.save(session);
         }
     }
@@ -158,6 +162,8 @@ public class DataSeeder implements CommandLineRunner {
             receivable.setDaysOverdue(10 + random.nextInt(60));
             receivable.setStatus(ReceivableStatus.OVERDUE);
             receivable.setReminderCount(0);
+            receivable.setEventId("inv_" + receivable.getInvoiceNumber() + "_" + receivable.getDueDate());
+            receivable.setHeldOut(random.nextDouble() < 0.20);
 
             // ~30% of receivables get a promise-to-pay with various statuses
             if (random.nextDouble() < 0.30) {

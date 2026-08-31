@@ -40,6 +40,18 @@ public class Transaction {
     @Column(length = 64)
     private String razorpayPaymentId;
 
+    /**
+     * Idempotency key — unique externally-meaningful identifier (e.g. payment/webhook event ID).
+     * The UNIQUE database constraint on this field is the guarantee-of-last-resort against
+     * duplicate processing; the orchestrator also checks for an existing SUCCESS attempt
+     * before executing any action.
+     */
+    @Column(unique = true, length = 128)
+    private String eventId;
+
+    /** True for entities in the held-out evaluation split (never used by the agent). */
+    private boolean isHeldOut;
+
     private LocalDateTime createdAt;
     private LocalDateTime lastAttemptAt;
 
