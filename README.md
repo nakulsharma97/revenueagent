@@ -14,16 +14,48 @@ The system runs a **detect → diagnose → simulate → select → execute → 
 
 ## Architecture
 
-```
-Feature vector → Customer state + fatigue → Counterfactual simulation of every eligible action
-  → expected net value ranking → confidence band → automation policy → NEXT BEST ACTION
-  → bounded execution → outcome recorded → learning
-```
+### One pipeline, every entry point
+
+The manual batch (`POST /api/recovery/run-batch`), the SSE streaming batch, the scheduler, the startup auto-run and webhook-ingested items all funnel into the **same processing core** — `RecoveryOrchestratorService.runBatchWithCallback` — so no code path can ever produce a different decision for the same entity. The intelligence engine is a single Spring-injected singleton shared by every caller (no manual `new` anywhere in production code).
 
 ```
-backend/   Spring Boot 3 (Java 21) — intelligence engine, rules engine, mock execution, metrics, audit
-frontend/  React + Vite — Command Center, Simulator, Human Review, Action Lab + live dashboards
+        ALL ENTRY POINTS (REST · SSE · scheduler · startup · webhook)
+                                │
+              RecoveryOrchestratorService (one batch core)
+                                │
+   DecisionAgentService ──▶ NextBestActionEngine (single bean)
+                                │
+     RulesEngine hard bounds (retries · cooldown · discount ceilings · uplift segment)
+                                │
+    execution (mock gateway / notifications) ──▶ audit ──▶ outcome ──▶ Outcome Memory
 ```
+
+### The decision pipeline
+
+```
+PAYMENT / CHECKOUT / RECEIVABLE
+  ↓ eligibility (RulesEngine: allowed actions, segment bounds, cooldown, idempotency)
+  ↓ customer recovery state + fatigue score
+  ↓ ACTION FRONTIER — counterfactual simulation of every eligible action
+  ↓ DecisionScore = expectedIncrementalRecovery − interventionCost − discountCost − fatiguePenalty − riskPenalty
+  ↓ best valid action (RecoveryValueOptimizer) + confidence + automation policy
+  ↓ AUTO_EXECUTE · SAFE_ACTION_ONLY · HUMAN_REVIEW
+  ↓ bounded execution → audit event → RecoveryOutcome → Outcome Memory / Action Lab
+```
+
+**The engine is deterministic and pure** — identical input always yields the identical decision, which is what makes REST vs SSE vs scheduler runs agree and the demo reproducible. A live LLM (optional) only explains a decision afterwards; it never chooses one (`llmDriven=true` strictly requires a real API response — nothing is faked).
+
+### Core data model
+
+| Entity | Role |
+|---|---|
+| `Transaction` · `CheckoutSession` · `Receivable` | the three revenue sources; each carries a unique `eventId` (webhook idempotency) |
+| `RecoveryAttempt` | the decision ledger: action, confidence, outcome, provenance (`decisionSource` + `engineVersion`), fatigue/state, decision trace |
+| `CounterfactualDecision` | every simulated action for a case, with the selected one flagged |
+| `RecoveryOutcome` | the training record (action, success, net value, failure context, segment) |
+| `HumanReviewCase` | approve / override / reject with reason + audit trail |
+| `RecoveryAnomaly` · `RecoveryExperiment` | risk findings and declared experimentation policies |
+| `AuditEvent` | append-only pipeline trail (ingest, evaluate, decide, execute, skip, batch) |
 
 ### The Recovery Intelligence layer (new)
 
@@ -60,6 +92,17 @@ frontend/  React + Vite — Command Center, Simulator, Human Review, Action Lab 
 | Customer segment-aware bounds | `BoundsConfig.boundsFor(segment)` — HIGH_VALUE gets wider limits |
 | DSO metric (B2B KPI) | `MetricsService.currentMetrics()` — Days Sales Outstanding for receivables |
 | Promise-to-pay tracker | `Receivable.promiseStatus` — tracks kept/broken promises |
+
+## Key design principles (what makes it different)
+
+1. **Incremental value, not success probability.** The engine prices the *lift* over the natural-recovery baseline and subtracts the true cost of margin, fatigue and risk. A 90%-success discount that gives away more than it creates loses to a cheaper action with lower headline success (see `rank_prefersHighestNetValue_overHighestSuccessRate` and the counterfactual view in the Decision Ledger).
+2. **Counterfactuals, not retry chains.** Every decision stores the full set of actions it *didn't* take and why — explainable by construction.
+3. **Fatigue-aware, not spam.** Repeated touchpoints raise a fatigue score (0→1) that de-escalates contact and finally stops automation or routes to a human.
+4. **Human-in-the-loop.** Confidence < 60%, the last retry before a segment limit, oversize discounts, and HIGH/CRITICAL anomalies route to the review queue with approve/override/reject — all audited.
+5. **Honest AI.** The engine decides; the LLM (optional) only explains. Every attempt is stamped with `RECOVERY_INTELLIGENCE_V1` / `decisionSource`; fallbacks and human overrides are recorded, never disguised as AI.
+6. **Exactly-once execution.** Webhook duplicates are impossible: DB unique constraint on `eventId` + indexed `existsByEventId` pre-check + SUCCESS-attempt skip in the batch.
+7. **Learning-ready.** Every outcome is persisted (context × segment × action) and aggregated into the Outcome Memory — a clean training signal for future ML, already powering the Action Performance Lab.
+8. **Measured, not claimed.** ~20% of entities are held out for evaluation; ~15% form a no-intervention control group; metrics are computed live from the actual ledger.
 
 ## Non-negotiable constraints
 
@@ -112,6 +155,7 @@ Expected *decisions* are deterministic (the engine uses no randomness); *outcome
 | `GET /api/intelligence/anomalies` | anomaly feed |
 | `GET /api/intelligence/experiments` · `POST /api/intelligence/experiments` | experimentation policies |
 | `GET /api/intelligence/action-performance` | Action Performance Lab (ranked by net value) |
+| `GET /api/intelligence/outcome-memory` | context × segment × action priors from outcome history |
 
 ## Running it locally
 
@@ -142,7 +186,7 @@ export LLM_ENABLED=true
 cd backend && mvn spring-boot:run
 ```
 
-Without these, `DecisionAgentService` falls back to a deterministic heuristic path — the demo never breaks.
+Without these the deterministic engine is still the decision-maker; the LLM explanation layer is simply skipped (`llmDriven=false`) — the demo never breaks and nothing is ever faked.
 
 ## Results — how to read the demo numbers
 
@@ -221,7 +265,7 @@ The `RulesEngine` enforces this in code: SURE_THING and LOST_CAUSE entities have
 |---|---|
 | Backend | Spring Boot 3 / Java 21 |
 | Database | H2 in-memory (dev) / MySQL (prod) |
-| Decision | RulesEngine (plain Java) + Claude API (optional) |
+| Decision | `NextBestActionEngine` + `RulesEngine` (plain Java); Claude API optional — explanation layer only |
 | Frontend | React + Vite, Recharts |
 | Mock services | MockPaymentGatewayService, MockNotificationService |
 
@@ -237,3 +281,5 @@ The `RulesEngine` enforces this in code: SURE_THING and LOST_CAUSE entities have
 ---
 
 **Full project brief:** See `PROJECT_BRIEF.md` for scope decisions, design rationale, and the complete problem breakdown.
+
+**5-minute screening pitch:** See `docs/PITCH_5MIN.md` — timed talking points and the live-demo click path for judges.
