@@ -2,7 +2,7 @@ package com.razorpay.recovery.recovery;
 
 import com.razorpay.recovery.config.BoundsConfig;
 import com.razorpay.recovery.recovery.EnforcedDecision;
-import com.razorpay.recovery.recovery.LlmDecision;
+import com.razorpay.recovery.recovery.RecoveryDecision;
 import com.razorpay.recovery.recovery.RecoveryAttempt.RecoveryAction;
 import com.razorpay.recovery.transaction.Transaction;
 import com.razorpay.recovery.transaction.Transaction.FailureReason;
@@ -129,7 +129,7 @@ class RulesEngineTest {
         // Use a retryable failure at retryCount=1 so OFFER_DISCOUNT is eligible
         Transaction tx = buildTx(FailureReason.INSUFFICIENT_FUNDS, 1, new BigDecimal("2499"));
         tx.setStatus(com.razorpay.recovery.transaction.Transaction.TransactionStatus.IN_RECOVERY);
-        LlmDecision proposed = new LlmDecision(
+        RecoveryDecision proposed = new RecoveryDecision(
                 RecoveryAction.OFFER_DISCOUNT, "LLM wants a big discount", 0.8, 40);
 
         EnforcedDecision result = rulesEngine.enforceBounds(tx, proposed);
@@ -149,7 +149,7 @@ class RulesEngineTest {
         // Use a retryable failure at retryCount=1 so OFFER_DISCOUNT is eligible
         Transaction tx = buildTx(FailureReason.INSUFFICIENT_FUNDS, 1, new BigDecimal("1000"));
         tx.setStatus(com.razorpay.recovery.transaction.Transaction.TransactionStatus.IN_RECOVERY);
-        LlmDecision proposed = new LlmDecision(
+        RecoveryDecision proposed = new RecoveryDecision(
                 RecoveryAction.OFFER_DISCOUNT, "15% is fair", 0.7, 15);
 
         EnforcedDecision result = rulesEngine.enforceBounds(tx, proposed);
@@ -163,7 +163,7 @@ class RulesEngineTest {
     void enforceBounds_rejectsActionNotInEligibleSet() {
         // retryCount = 3 → max retries exhausted → only SEND_PAYMENT_LINK, ESCALATE, ABANDON
         Transaction tx = buildTx(FailureReason.INSUFFICIENT_FUNDS, 3, new BigDecimal("1000"));
-        LlmDecision proposed = new LlmDecision(
+        RecoveryDecision proposed = new RecoveryDecision(
                 RecoveryAction.RETRY_NOW, "LLM hallucinated a retry", 0.9, null);
 
         EnforcedDecision result = rulesEngine.enforceBounds(tx, proposed);
@@ -194,7 +194,7 @@ class RulesEngineTest {
         // Use retryCount=1, IN_RECOVERY so RETRY_NOW is eligible
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 1, new BigDecimal("2499"));
         tx.setStatus(com.razorpay.recovery.transaction.Transaction.TransactionStatus.IN_RECOVERY);
-        LlmDecision proposed = new LlmDecision(
+        RecoveryDecision proposed = new RecoveryDecision(
                 RecoveryAction.RETRY_NOW, "Transient failure, retry immediately", 0.8, null);
 
         EnforcedDecision result = rulesEngine.enforceBounds(tx, proposed);
@@ -211,7 +211,7 @@ class RulesEngineTest {
     @Test
     void requiresHumanSignoff_discountAboveCeiling() {
         Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 0, new BigDecimal("2499"));
-        LlmDecision proposed = new LlmDecision(
+        RecoveryDecision proposed = new RecoveryDecision(
                 RecoveryAction.OFFER_DISCOUNT, "Big discount", 0.8, 20);
 
         assertTrue(rulesEngine.requiresHumanSignoff(tx, proposed),
@@ -221,7 +221,7 @@ class RulesEngineTest {
     @Test
     void requiresHumanSignoff_discountAtCeiling_noSignoff() {
         Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 0, new BigDecimal("1000"));
-        LlmDecision proposed = new LlmDecision(
+        RecoveryDecision proposed = new RecoveryDecision(
                 RecoveryAction.OFFER_DISCOUNT, "Fair discount", 0.7, 15);
 
         assertFalse(rulesEngine.requiresHumanSignoff(tx, proposed),
@@ -232,7 +232,7 @@ class RulesEngineTest {
     void requiresHumanSignoff_thirdFailure() {
         // retryCount = 2, maxRetries = 3 → 3rd consecutive failure
         Transaction tx = buildTx(FailureReason.INSUFFICIENT_FUNDS, 2, new BigDecimal("1000"));
-        LlmDecision proposed = new LlmDecision(
+        RecoveryDecision proposed = new RecoveryDecision(
                 RecoveryAction.RETRY_NOW, "One more try", 0.6, null);
 
         assertTrue(rulesEngine.requiresHumanSignoff(tx, proposed),
@@ -242,7 +242,7 @@ class RulesEngineTest {
     @Test
     void requiresHumanSignoff_secondFailure_noSignoff() {
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 1, new BigDecimal("1000"));
-        LlmDecision proposed = new LlmDecision(
+        RecoveryDecision proposed = new RecoveryDecision(
                 RecoveryAction.RETRY_SCHEDULED, "Schedule retry", 0.55, null);
 
         assertFalse(rulesEngine.requiresHumanSignoff(tx, proposed),
@@ -252,7 +252,7 @@ class RulesEngineTest {
     @Test
     void requiresHumanSignoff_noDiscount_noRetries_noSignoff() {
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
-        LlmDecision proposed = new LlmDecision(
+        RecoveryDecision proposed = new RecoveryDecision(
                 RecoveryAction.RETRY_NOW, "First failure, retry", 0.6, null);
 
         assertFalse(rulesEngine.requiresHumanSignoff(tx, proposed),
@@ -306,7 +306,7 @@ class RulesEngineTest {
         tx.setStatus(com.razorpay.recovery.transaction.Transaction.TransactionStatus.IN_RECOVERY);
 
         // Set proposed discount to 20% — exceeds STANDARD ceiling (15%) but within HIGH_VALUE ceiling (25%)
-        LlmDecision proposed20 = new LlmDecision(RecoveryAction.OFFER_DISCOUNT, "Test", 0.7, 20);
+        RecoveryDecision proposed20 = new RecoveryDecision(RecoveryAction.OFFER_DISCOUNT, "Test", 0.7, 20);
 
         // STANDARD: 20% > 15% ceiling -> should be capped
         EnforcedDecision enforcedStd = rulesEngine.enforceBounds(tx, proposed20);

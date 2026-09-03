@@ -1,5 +1,7 @@
 package com.razorpay.recovery.intelligence;
 
+import org.springframework.stereotype.Service;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -14,6 +16,7 @@ import java.util.Map;
  * minus intervention costs), never by success rate alone — a cheap reminder that
  * recovers ₹8,000 at 90% cost outranks a ₹2,000-discount action that recovers ₹9,000.
  */
+@Service
 public class OutcomeLearningService {
 
     /** One row of the Action Performance Lab. */

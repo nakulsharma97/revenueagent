@@ -123,7 +123,7 @@ public class RulesEngine {
      * Returns a corrected/rejected decision rather than trusting the model.
      * Flags when human sign-off is required per the brief's bounded-workflow rules.
      */
-    public EnforcedDecision enforceBounds(Transaction tx, LlmDecision proposed) {
+    public EnforcedDecision enforceBounds(Transaction tx, RecoveryDecision proposed) {
         Set<RecoveryAction> allowed = Set.copyOf(eligibleActions(tx));
 
         if (proposed == null || !allowed.contains(proposed.action())) {
@@ -133,7 +133,7 @@ public class RulesEngine {
         if (proposed.action() == RecoveryAction.OFFER_DISCOUNT) {
             int pct = proposed.discountPercent() == null ? 0 : proposed.discountPercent();
             if (pct > getMaxDiscountPercent() || pct <= 0) {
-                LlmDecision capped = new LlmDecision(
+                RecoveryDecision capped = new RecoveryDecision(
                         RecoveryAction.OFFER_DISCOUNT,
                         proposed.reasoning() + " [capped by RulesEngine to policy max]",
                         proposed.confidence(),
@@ -154,7 +154,7 @@ public class RulesEngine {
      * Segment-aware enforcement: caps discounts against the bounds for the given
      * customer segment (HIGH_VALUE gets a wider ceiling), not the global default.
      */
-    public EnforcedDecision enforceBounds(Transaction tx, Customer.CustomerSegment segment, LlmDecision proposed) {
+    public EnforcedDecision enforceBounds(Transaction tx, Customer.CustomerSegment segment, RecoveryDecision proposed) {
         Set<RecoveryAction> allowed = Set.copyOf(eligibleActions(tx, segment));
 
         if (proposed == null || !allowed.contains(proposed.action())) {
@@ -165,7 +165,7 @@ public class RulesEngine {
             int cap = getBoundsFor(segment).maxDiscountPercent();
             int pct = proposed.discountPercent() == null ? 0 : proposed.discountPercent();
             if (pct > cap || pct <= 0) {
-                LlmDecision capped = new LlmDecision(
+                RecoveryDecision capped = new RecoveryDecision(
                         RecoveryAction.OFFER_DISCOUNT,
                         proposed.reasoning() + " [capped by RulesEngine to policy max]",
                         proposed.confidence(),
@@ -187,7 +187,7 @@ public class RulesEngine {
      * per PROJECT_BRIEF.md section 3: "anything above the discount ceiling, or a 3rd consecutive failure."
      * This is the single most gradeable proof that the system is bounded.
      */
-    public boolean requiresHumanSignoff(Transaction tx, LlmDecision proposed) {
+    public boolean requiresHumanSignoff(Transaction tx, RecoveryDecision proposed) {
         // Condition A: proposed discount exceeds the ceiling
         if (proposed != null && proposed.action() == RecoveryAction.OFFER_DISCOUNT) {
             int pct = proposed.discountPercent() == null ? 0 : proposed.discountPercent();
@@ -203,7 +203,7 @@ public class RulesEngine {
     }
 
     /** Segment-aware variant — sign-off thresholds follow the segment's bounds. */
-    public boolean requiresHumanSignoff(Transaction tx, Customer.CustomerSegment segment, LlmDecision proposed) {
+    public boolean requiresHumanSignoff(Transaction tx, Customer.CustomerSegment segment, RecoveryDecision proposed) {
         BoundsConfig.SegmentBounds bounds = getBoundsFor(segment);
         // Condition A: proposed discount exceeds the segment's ceiling
         if (proposed != null && proposed.action() == RecoveryAction.OFFER_DISCOUNT) {
@@ -219,11 +219,11 @@ public class RulesEngine {
         return false;
     }
 
-    private LlmDecision safestFallback(Set<RecoveryAction> allowed) {
+    private RecoveryDecision safestFallback(Set<RecoveryAction> allowed) {
         RecoveryAction fallback = allowed.contains(RecoveryAction.SEND_PAYMENT_LINK)
                 ? RecoveryAction.SEND_PAYMENT_LINK
                 : RecoveryAction.ESCALATE_TO_HUMAN;
-        return new LlmDecision(fallback, "Rules-engine fallback: proposed action was out of bounds.", 0.5, null);
+        return new RecoveryDecision(fallback, "Rules-engine fallback: proposed action was out of bounds.", 0.5, null);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -294,7 +294,7 @@ public class RulesEngine {
         return eligible;
     }
 
-    public EnforcedDecision enforceBounds(CheckoutSession session, LlmDecision proposed) {
+    public EnforcedDecision enforceBounds(CheckoutSession session, RecoveryDecision proposed) {
         Set<RecoveryAction> allowed = Set.copyOf(eligibleActions(session));
         if (proposed == null || !allowed.contains(proposed.action())) {
             return EnforcedDecision.ok(safestFallback(allowed));
@@ -302,7 +302,7 @@ public class RulesEngine {
         if (proposed.action() == RecoveryAction.OFFER_DISCOUNT) {
             int pct = proposed.discountPercent() == null ? 0 : proposed.discountPercent();
             if (pct > getMaxDiscountPercent() || pct <= 0) {
-                LlmDecision capped = new LlmDecision(
+                RecoveryDecision capped = new RecoveryDecision(
                         RecoveryAction.OFFER_DISCOUNT,
                         proposed.reasoning() + " [capped by RulesEngine to policy max]",
                         proposed.confidence(),
@@ -315,7 +315,7 @@ public class RulesEngine {
         return EnforcedDecision.ok(proposed);
     }
 
-    public boolean requiresHumanSignoff(CheckoutSession session, LlmDecision proposed) {
+    public boolean requiresHumanSignoff(CheckoutSession session, RecoveryDecision proposed) {
         if (proposed != null && proposed.action() == RecoveryAction.OFFER_DISCOUNT) {
             int pct = proposed.discountPercent() == null ? 0 : proposed.discountPercent();
             if (pct > getMaxDiscountPercent()) return true;
@@ -353,7 +353,7 @@ public class RulesEngine {
         return eligible;
     }
 
-    public EnforcedDecision enforceBounds(Receivable receivable, LlmDecision proposed) {
+    public EnforcedDecision enforceBounds(Receivable receivable, RecoveryDecision proposed) {
         Set<RecoveryAction> allowed = Set.copyOf(eligibleActions(receivable));
         if (proposed == null || !allowed.contains(proposed.action())) {
             return EnforcedDecision.ok(safestFallback(allowed));
@@ -361,7 +361,7 @@ public class RulesEngine {
         return EnforcedDecision.ok(proposed);
     }
 
-    public boolean requiresHumanSignoff(Receivable receivable, LlmDecision proposed) {
+    public boolean requiresHumanSignoff(Receivable receivable, RecoveryDecision proposed) {
         if (receivable.getReminderCount() >= getMaxRetries() - 1) return true;
         return false;
     }
@@ -385,7 +385,7 @@ public class RulesEngine {
         return eligible;
     }
 
-    public EnforcedDecision enforceBounds(Transaction tx, LlmDecision proposed, DecisionTrace trace) {
+    public EnforcedDecision enforceBounds(Transaction tx, RecoveryDecision proposed, DecisionTrace trace) {
         EnforcedDecision enforced = enforceBounds(tx, proposed);
         if (enforced.requiresHumanSignoff()) {
             trace.add("BOUNDS_CHECK", "RulesEngine flagged human sign-off required: " + enforced.signoffReason());
@@ -397,8 +397,8 @@ public class RulesEngine {
         return enforced;
     }
 
-    /** Segment-aware trace variant of {@link #enforceBounds(Transaction, Customer.CustomerSegment, LlmDecision)}. */
-    public EnforcedDecision enforceBounds(Transaction tx, Customer.CustomerSegment segment, LlmDecision proposed, DecisionTrace trace) {
+    /** Segment-aware trace variant of {@link #enforceBounds(Transaction, Customer.CustomerSegment, RecoveryDecision)}. */
+    public EnforcedDecision enforceBounds(Transaction tx, Customer.CustomerSegment segment, RecoveryDecision proposed, DecisionTrace trace) {
         EnforcedDecision enforced = enforceBounds(tx, segment, proposed);
         Set<RecoveryAction> allowed = Set.copyOf(eligibleActions(tx, segment));
         if (enforced.requiresHumanSignoff()) {
@@ -418,7 +418,7 @@ public class RulesEngine {
         return eligible;
     }
 
-    public EnforcedDecision enforceBounds(CheckoutSession session, LlmDecision proposed, DecisionTrace trace) {
+    public EnforcedDecision enforceBounds(CheckoutSession session, RecoveryDecision proposed, DecisionTrace trace) {
         EnforcedDecision enforced = enforceBounds(session, proposed);
         if (enforced.requiresHumanSignoff()) {
             trace.add("BOUNDS_CHECK", "RulesEngine flagged human sign-off required: " + enforced.signoffReason());
@@ -437,7 +437,7 @@ public class RulesEngine {
         return eligible;
     }
 
-    public EnforcedDecision enforceBounds(Receivable receivable, LlmDecision proposed, DecisionTrace trace) {
+    public EnforcedDecision enforceBounds(Receivable receivable, RecoveryDecision proposed, DecisionTrace trace) {
         EnforcedDecision enforced = enforceBounds(receivable, proposed);
         if (enforced.requiresHumanSignoff()) {
             trace.add("BOUNDS_CHECK", "RulesEngine flagged human sign-off required: " + enforced.signoffReason());

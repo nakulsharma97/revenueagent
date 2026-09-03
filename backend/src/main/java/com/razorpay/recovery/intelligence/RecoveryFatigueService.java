@@ -1,5 +1,7 @@
 package com.razorpay.recovery.intelligence;
 
+import org.springframework.stereotype.Service;
+
 /**
  * Models customer recovery fatigue — how much further contact is likely to annoy
  * rather than persuade. Fatigue is driven by the number of prior interventions,
@@ -10,6 +12,7 @@ package com.razorpay.recovery.intelligence;
  * low-cost actions. High-value customers are deliberately scored at half weight —
  * more revenue at stake justifies more touchpoints before they tire.</p>
  */
+@Service
 public class RecoveryFatigueService {
 
     /** 0.0 fresh → 1.0 severe. Pure function of the case features. */

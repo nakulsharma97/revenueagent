@@ -14,7 +14,9 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class NextBestActionEngineTest {
 
-    private final NextBestActionEngine engine = new NextBestActionEngine();
+    private final NextBestActionEngine engine = new NextBestActionEngine(
+            new UpliftScoringService(), new RecoveryFatigueService(), new CustomerStateService(),
+            new DecisionConfidenceService(), new RecoveryValueOptimizer(), new AnomalyDetectionService());
 
     // ── helpers ───────────────────────────────────────────────────────
 
@@ -227,7 +229,47 @@ class NextBestActionEngineTest {
         assertTrue(d.confidence() >= 0.60, "Fresh transient failure on a reliable customer is a confident decision");
     }
 
-    // ── 6. Determinism (REST/SSE/scheduler agreement) ─────────────────
+    // ── 6. Net value beats raw success probability (the optimizer's rule) ──
+
+    @Test
+    void rank_prefersHighestNetValue_overHighestSuccessRate() {
+        // The Discount candidate looks best by headline success (90%) but burns margin;
+        // the Payment Link recovers less often yet keeps more of the money. The engine
+        // must select the Payment Link because its INCREMENTAL NET VALUE is higher.
+        RecoveryCase c = paymentCase(new BigDecimal("10000"), 1, 0.5, false, "INSUFFICIENT_FUNDS", true,
+                List.of(RecoveryAction.RETRY_NOW, RecoveryAction.OFFER_DISCOUNT, RecoveryAction.SEND_PAYMENT_LINK), 3, 15);
+
+        ActionEvaluation discount = new ActionEvaluation(RecoveryAction.OFFER_DISCOUNT, 20,
+                0.90, 0.20, 0.70,
+                new BigDecimal("9000"),
+                new BigDecimal("0.35"), new BigDecimal("2000"), BigDecimal.ZERO,
+                new BigDecimal("6999.65"), new BigDecimal("4999.65"),
+                0.10, 0.85, "20% discount — high success, high margin cost");
+        ActionEvaluation payLink = new ActionEvaluation(RecoveryAction.SEND_PAYMENT_LINK, null,
+                0.75, 0.20, 0.55,
+                new BigDecimal("7500"),
+                new BigDecimal("0.35"), BigDecimal.ZERO, BigDecimal.ZERO,
+                new BigDecimal("7499.65"), new BigDecimal("5499.65"),
+                0.05, 0.88, "payment link — lower success, far cheaper");
+
+        List<ActionEvaluation> ranked = engine.rank(c, List.of(discount, payLink));
+        ActionEvaluation winner = ranked.get(0);
+
+        assertEquals(RecoveryAction.SEND_PAYMENT_LINK, winner.action(),
+                "Highest net value must win even when another action has the higher success rate");
+        assertTrue(discount.successProbability() > winner.successProbability(),
+                "Precondition: the losing action really has the higher raw success rate");
+        // Sanity: winner has the higher incremental net value of the two.
+        assertTrue(winner.incrementalNetValue().compareTo(discount.incrementalNetValue()) > 0);
+    }
+
+    @Test
+    void engine_exposesStableVersionForProvenance() {
+        assertEquals("RECOVERY_INTELLIGENCE_V1", NextBestActionEngine.ENGINE_VERSION,
+                "Engine version must be stable so attempts can prove their provenance");
+    }
+
+    // ── 7. Determinism (REST/SSE/scheduler agreement) ─────────────────
 
     @Test
     void sameCase_alwaysProducesIdenticalDecision() {

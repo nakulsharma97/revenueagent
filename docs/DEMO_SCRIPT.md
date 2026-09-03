@@ -40,7 +40,7 @@ Open **Human Review**. Cases present because: sign-off thresholds (final retry b
 
 ## 5. Action Lab + learning loop (2:40–3:20)
 
-Open **Action Lab**: actions ranked by **net value** (recovered − intervention cost), with success rate as context — e.g. a cheap reminder or plan may outrank a margin-burning discount. Below it, the declared **Experiments** (pay-link vs reminder, discount sensitivity, payment-plan adoption) with their control percentages — and an inline “declare experiment” form.
+Open **Action Lab**: actions ranked by **net value** (recovered − intervention cost), with success rate as context — e.g. a cheap reminder or plan may outrank a margin-burning discount. Below it, the **Outcome Memory** table (`/api/intelligence/outcome-memory`): the same action remembered *per situation* — “for CARD_EXPIRED in HIGH_VALUE, pay-links converted 2/3 for ₹X net; for INSUFFICIENT_FUNDS, the 10% discount burned margin”. Then the declared **Experiments** (pay-link vs reminder, discount sensitivity, payment-plan adoption) with their control percentages — and an inline “declare experiment” form.
 
 ## 6. Why this is not a normal recovery system (3:20–4:00)
 
@@ -57,4 +57,4 @@ Then answer the obvious question: *why did it do that?* → every decision carri
 ## Script notes for judges
 
 - If a case you search isn't in the ledger, run a batch first (top-right **Run Batch ▶**) — it re-processes eligible items and refreshes everything, including the review queue.
-- Backend sanity endpoints: `GET /api/intelligence/command-center`, `GET /api/intelligence/review`, `GET /api/recovery/attempts`, `GET /api/audit/events` (audit trail).
+- Backend sanity endpoints: `GET /api/intelligence/command-center`, `GET /api/intelligence/review`, `GET /api/intelligence/outcome-memory`, `GET /api/recovery/attempts`, `GET /api/audit/events` (audit trail).

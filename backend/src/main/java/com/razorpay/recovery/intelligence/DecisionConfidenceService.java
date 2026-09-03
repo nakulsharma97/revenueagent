@@ -1,5 +1,7 @@
 package com.razorpay.recovery.intelligence;
 
+import org.springframework.stereotype.Service;
+
 import java.util.List;
 
 /**
@@ -15,6 +17,7 @@ import java.util.List;
  * richness of the data (known reliability, meaningful amount, several candidates) and
  * falls with fatigue.
  */
+@Service
 public class DecisionConfidenceService {
 
     public enum Policy {

@@ -99,6 +99,12 @@ export async function fetchActionPerformance() {
   return res.json();
 }
 
+export async function fetchOutcomeMemory() {
+  const res = await fetch(`${API_BASE}/api/intelligence/outcome-memory`);
+  if (!res.ok) throw new Error('outcome memory fetch failed');
+  return res.json();
+}
+
 export async function fetchAnomalies(status) {
   const res = await fetch(`${API_BASE}/api/intelligence/anomalies?status=${status || 'OPEN'}`);
   if (!res.ok) throw new Error('anomalies fetch failed');

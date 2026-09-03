@@ -43,7 +43,7 @@ import java.util.Optional;
 @Service
 public class RecoveryIntelligenceService {
 
-    private final NextBestActionEngine engine = new NextBestActionEngine();
+    private final NextBestActionEngine engine;
     private final CounterfactualDecisionRepository counterfactualRepository;
     private final RecoveryOutcomeRepository outcomeRepository;
     private final HumanReviewCaseRepository reviewRepository;
@@ -56,7 +56,7 @@ public class RecoveryIntelligenceService {
     private final TransactionRepository transactionRepository;
     private final CheckoutSessionRepository checkoutSessionRepository;
     private final ReceivableRepository receivableRepository;
-    private final OutcomeLearningService learningService = new OutcomeLearningService();
+    private final OutcomeLearningService learningService;
 
     public RecoveryIntelligenceService(CounterfactualDecisionRepository counterfactualRepository,
                                        RecoveryOutcomeRepository outcomeRepository,
@@ -69,7 +69,11 @@ public class RecoveryIntelligenceService {
                                        RecoveryExperimentRepository experimentRepository,
                                        TransactionRepository transactionRepository,
                                        CheckoutSessionRepository checkoutSessionRepository,
-                                       ReceivableRepository receivableRepository) {
+                                       ReceivableRepository receivableRepository,
+                                       NextBestActionEngine engine,
+                                       OutcomeLearningService learningService) {
+        this.engine = engine;
+        this.learningService = learningService;
         this.counterfactualRepository = counterfactualRepository;
         this.outcomeRepository = outcomeRepository;
         this.reviewRepository = reviewRepository;
@@ -242,7 +246,7 @@ public class RecoveryIntelligenceService {
     /** Aggregate action performance from persisted outcomes. */
     @Transactional(readOnly = true)
     public List<OutcomeLearningService.ActionPerformance> actionPerformance() {
-        return new OutcomeLearningService().rankByNetValue(outcomeRepository.findAll());
+        return learningService.rankByNetValue(outcomeRepository.findAll());
     }
 
     /** Latest counterfactual rows for one entity (sourceType = PAYMENT|CHECKOUT|RECEIVABLE). */
@@ -292,6 +296,13 @@ public class RecoveryIntelligenceService {
                 boolean approved = status == HumanReviewCase.Status.APPROVED || status == HumanReviewCase.Status.OVERRIDDEN;
                 attempt.setSignoffStatus(approved ? RecoveryAttempt.SignoffStatus.APPROVED : RecoveryAttempt.SignoffStatus.REJECTED);
                 attempt.setSignoffResolvedAt(LocalDateTime.now());
+                if (status == HumanReviewCase.Status.OVERRIDDEN) {
+                    // Provenance: the ledger now records a human decision, not the machine's.
+                    attempt.setDecisionSource(RecoveryAttempt.DecisionSource.MANUAL_HUMAN_OVERRIDE);
+                    attempt.setFallbackReason("Human overrode the engine's " + attempt.getActionTaken()
+                            + " with " + (humanAction == null ? "no action" : humanAction)
+                            + (overrideReason == null || overrideReason.isBlank() ? "" : ": " + overrideReason));
+                }
                 attemptRepository.save(attempt);
             });
         }

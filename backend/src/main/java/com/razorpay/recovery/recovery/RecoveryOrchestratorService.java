@@ -1,5 +1,6 @@
 package com.razorpay.recovery.recovery;
 import com.razorpay.recovery.recovery.RecoveryAttempt.AttemptOutcome;
+import com.razorpay.recovery.recovery.RecoveryAttempt.DecisionSource;
 import com.razorpay.recovery.recovery.RecoveryAttempt.RecoveryAction;
 import com.razorpay.recovery.recovery.RecoveryAttempt.SourceType;
 import com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment;
@@ -7,6 +8,7 @@ import com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment;
 import com.razorpay.recovery.audit.AuditEvent;
 import com.razorpay.recovery.audit.AuditService;
 import com.razorpay.recovery.config.BoundsConfig;
+import com.razorpay.recovery.intelligence.NextBestActionEngine;
 import com.razorpay.recovery.intelligence.RecoveryIntelligenceService;
 import com.razorpay.recovery.checkout.CheckoutSession;
 import com.razorpay.recovery.checkout.CheckoutSession.CheckoutStatus;
@@ -251,7 +253,7 @@ public class RecoveryOrchestratorService {
         Customer.CustomerSegment customerSegment = decisionAgentService.segmentOf(tx);
         int segmentMaxRetries = boundsConfig.boundsFor(customerSegment).maxRetries();
         DecisionResult result = decisionAgentService.decideWithMeta(tx, customerSegment, trace);
-        LlmDecision decision = result.decision();
+        RecoveryDecision decision = result.decision();
         audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.AI_RECOMMENDATION_RECEIVED,
                 "TRANSACTION", String.valueOf(tx.getId()),
                 "Decision: " + decision.action() + " (confidence " + decision.confidence() + ", llmDriven=" + result.llmDriven() + ")");
@@ -259,10 +261,12 @@ public class RecoveryOrchestratorService {
         // ── Apply uplift-segment filter to eligible actions ──
         List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx, customerSegment);
         rulesEngine.filterByUpliftSegment(eligible, segment);
+        boolean upliftFiltered = false;
         if (!eligible.contains(decision.action())) {
             // Original choice filtered out by uplift segment — pick the first remaining eligible action
             trace.add("UPLIFT_FILTER", "Action " + decision.action() + " removed for segment " + segment + " — falling back to " + eligible.get(0));
-            decision = new LlmDecision(eligible.get(0), "Uplift-segment " + segment + " filtered: " + decision.reasoning(), decision.confidence(), decision.discountPercent());
+            decision = new RecoveryDecision(eligible.get(0), "Uplift-segment " + segment + " filtered: " + decision.reasoning(), decision.confidence(), decision.discountPercent());
+            upliftFiltered = true;
         }
 
         RecoveryAttempt attempt = new RecoveryAttempt();
@@ -280,6 +284,12 @@ public class RecoveryOrchestratorService {
         attempt.setDecisionTrace(trace);
         attempt.setCustomerMessage(decision.customerMessage());
         attempt.setUpliftSegment(segment);
+        // Provenance: this action was decided by the shared intelligence engine.
+        attempt.setDecisionSource(DecisionSource.RECOVERY_INTELLIGENCE_ENGINE);
+        attempt.setEngineVersion(NextBestActionEngine.ENGINE_VERSION);
+        if (upliftFiltered) {
+            attempt.setFallbackReason("Uplift-segment " + segment + " filter overrode the engine's first choice.");
+        }
 
         // Intelligence pass BEFORE execution mutates the entity: persists the counterfactual
         // simulation, enriches the attempt with state/fatigue, flags anomalies, routes review.
@@ -293,7 +303,7 @@ public class RecoveryOrchestratorService {
         return attempt;
     }
 
-    private boolean executePayment(Transaction tx, LlmDecision decision, RecoveryAttempt attempt) {
+    private boolean executePayment(Transaction tx, RecoveryDecision decision, RecoveryAttempt attempt) {
         // Set customerNotified based on action type
         attempt.setCustomerNotified(switch (decision.action()) {
             case RETRY_SILENT, RETRY_NOW, RETRY_SCHEDULED -> false;
@@ -386,7 +396,7 @@ public class RecoveryOrchestratorService {
         trace.add("UPLIFT_CLASSIFY", "Segment: " + segment);
 
         DecisionResult result = decisionAgentService.decideWithMetaCheckout(session, trace);
-        LlmDecision decision = result.decision();
+        RecoveryDecision decision = result.decision();
         audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.AI_RECOMMENDATION_RECEIVED,
                 "CHECKOUT_SESSION", String.valueOf(session.getId()),
                 "Decision: " + decision.action() + " (confidence " + decision.confidence() + ", llmDriven=" + result.llmDriven() + ")");
@@ -406,6 +416,9 @@ public class RecoveryOrchestratorService {
         attempt.setDecisionTrace(trace);
         attempt.setCustomerMessage(decision.customerMessage());
         attempt.setUpliftSegment(segment);
+        // Provenance: this action was decided by the shared intelligence engine.
+        attempt.setDecisionSource(DecisionSource.RECOVERY_INTELLIGENCE_ENGINE);
+        attempt.setEngineVersion(NextBestActionEngine.ENGINE_VERSION);
 
         // Intelligence pass BEFORE execution mutates the session (see payment flow).
         intelligenceService.recordDecision(attempt, batchId);
@@ -418,7 +431,7 @@ public class RecoveryOrchestratorService {
         return attempt;
     }
 
-    private boolean executeCheckout(CheckoutSession session, LlmDecision decision, RecoveryAttempt attempt) {
+    private boolean executeCheckout(CheckoutSession session, RecoveryDecision decision, RecoveryAttempt attempt) {
         // Checkout actions are always customer-facing
         attempt.setCustomerNotified(true);
         return switch (decision.action()) {
@@ -501,7 +514,7 @@ public class RecoveryOrchestratorService {
         trace.add("UPLIFT_CLASSIFY", "Segment: " + segment);
 
         DecisionResult result = decisionAgentService.decideWithMetaReceivable(receivable, trace);
-        LlmDecision decision = result.decision();
+        RecoveryDecision decision = result.decision();
         audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.AI_RECOMMENDATION_RECEIVED,
                 "RECEIVABLE", String.valueOf(receivable.getId()),
                 "Decision: " + decision.action() + " (confidence " + decision.confidence() + ", llmDriven=" + result.llmDriven() + ")");
@@ -521,6 +534,9 @@ public class RecoveryOrchestratorService {
         attempt.setDecisionTrace(trace);
         attempt.setCustomerMessage(decision.customerMessage());
         attempt.setUpliftSegment(segment);
+        // Provenance: this action was decided by the shared intelligence engine.
+        attempt.setDecisionSource(DecisionSource.RECOVERY_INTELLIGENCE_ENGINE);
+        attempt.setEngineVersion(NextBestActionEngine.ENGINE_VERSION);
 
         // Intelligence pass BEFORE execution mutates the receivable (see payment flow).
         intelligenceService.recordDecision(attempt, batchId);
@@ -533,7 +549,7 @@ public class RecoveryOrchestratorService {
         return attempt;
     }
 
-    private boolean executeReceivable(Receivable receivable, LlmDecision decision, RecoveryAttempt attempt) {
+    private boolean executeReceivable(Receivable receivable, RecoveryDecision decision, RecoveryAttempt attempt) {
         // Receivable actions are always customer-facing (B2B communication)
         attempt.setCustomerNotified(true);
         return switch (decision.action()) {

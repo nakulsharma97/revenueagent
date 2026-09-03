@@ -1,5 +1,7 @@
 package com.razorpay.recovery.intelligence;
 
+import org.springframework.stereotype.Service;
+
 import java.math.BigDecimal;
 
 /**
@@ -12,6 +14,7 @@ import java.math.BigDecimal;
  * is worth ₹7,980 — the optimizer prefers the latter even though the former has the
  * higher headline.</p>
  */
+@Service
 public class RecoveryValueOptimizer {
 
     /** Expected recovered revenue minus all costs, for display/audit. */

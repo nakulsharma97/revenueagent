@@ -1,5 +1,7 @@
 package com.razorpay.recovery.intelligence;
 
+import org.springframework.stereotype.Service;
+
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -9,6 +11,7 @@ import java.util.List;
  * documented rule over the case features; HIGH/CRITICAL findings are routed to the
  * human review queue alongside low-confidence decisions.
  */
+@Service
 public class AnomalyDetectionService {
 
     public enum Severity { LOW, MEDIUM, HIGH, CRITICAL }

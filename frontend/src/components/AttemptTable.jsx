@@ -93,6 +93,9 @@ function AttemptTableInner({ attempts, onSelectAttempt }) {
                         {!a.customerNotified && a.actionTaken !== 'ESCALATE_TO_HUMAN' && a.actionTaken !== 'ABANDON' && (
                           <span style={{ padding: '1px 5px', borderRadius: 'var(--radius-full)', background: 'var(--surface-hover)', border: '1px solid var(--border)', fontSize: 9, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>SILENT</span>
                         )}
+                        {a.decisionSource === 'RECOVERY_INTELLIGENCE_ENGINE' && (
+                          <span title={`Decision source: ${a.decisionSource.replaceAll('_', ' ')}`} style={{ padding: '1px 5px', borderRadius: 'var(--radius-full)', background: 'var(--green-bg)', color: 'var(--green)', fontSize: 9, fontWeight: 700, letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>{a.engineVersion ? a.engineVersion.replace('RECOVERY_INTELLIGENCE_', 'ENGINE ') : 'ENGINE'}</span>
+                        )}
                       </span>
                     </td>
                     <td style={{ padding: '10px 12px' }} onClick={() => setOpenId(isOpen ? null : a.id)}>
@@ -121,6 +124,13 @@ function AttemptTableInner({ attempts, onSelectAttempt }) {
                           <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                             {a.recoveryState && <span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: 'var(--gold-bg)', color: 'var(--gold)', fontSize: 10, fontWeight: 700 }}>STATE · {a.recoveryState.replaceAll('_', ' ')}</span>}
                             {a.fatigueScore > 0 && <span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: a.fatigueScore >= 0.6 ? 'var(--red-bg)' : 'var(--amber-bg)', color: a.fatigueScore >= 0.6 ? 'var(--red)' : 'var(--amber)', fontSize: 10, fontWeight: 700 }}>FATIGUE · {(a.fatigueScore * 100).toFixed(0)}%</span>}
+                          </div>
+                        )}
+                        {(a.decisionSource || a.engineVersion || a.fallbackReason) && (
+                          <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            {a.decisionSource && <span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: 'var(--green-bg)', color: 'var(--green)', fontSize: 10, fontWeight: 700 }}>SOURCE · {a.decisionSource.replaceAll('_', ' ')}</span>}
+                            {a.engineVersion && <span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: 'var(--surface-hover)', border: '1px solid var(--border)', color: 'var(--text-secondary)', fontSize: 10, fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{a.engineVersion}</span>}
+                            {a.fallbackReason && <span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: 'var(--amber-bg)', color: 'var(--amber)', fontSize: 10, fontWeight: 600 }}>FALLBACK · {a.fallbackReason}</span>}
                           </div>
                         )}
                         {a.requiresHumanSignoff && a.signoffReason && (

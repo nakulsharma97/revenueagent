@@ -5,6 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.razorpay.recovery.audit.AuditEvent;
 import com.razorpay.recovery.audit.AuditEventRepository;
 import com.razorpay.recovery.api.RecoveryApiService;
+import com.razorpay.recovery.intelligence.CounterfactualDecision;
+import com.razorpay.recovery.intelligence.CounterfactualDecisionRepository;
+import com.razorpay.recovery.intelligence.NextBestActionEngine;
+import com.razorpay.recovery.intelligence.OutcomeMemoryService;
 import com.razorpay.recovery.checkout.CheckoutSessionRepository;
 import com.razorpay.recovery.customer.Customer;
 import com.razorpay.recovery.customer.CustomerRepository;
@@ -64,6 +68,8 @@ class RecoveryPipelineIntegrationTest {
     @Autowired private RecoveryOrchestratorService orchestrator;
     @Autowired private RecoveryApiService apiService;
     @Autowired private RecoveryScheduler scheduler;
+    @Autowired private CounterfactualDecisionRepository counterfactualRepository;
+    @Autowired private OutcomeMemoryService outcomeMemory;
 
     // ── 1. Transactions endpoint: OSIV disabled, lazy chain serialized via DTOs ──
 
@@ -308,6 +314,80 @@ class RecoveryPipelineIntegrationTest {
                 "Every processed item must reconcile to succeeded/failed/skipped (progress reaches 100%)");
 
         assertTrue(skipped >= 1, "Cooldown-skip candidate must be recorded as SKIPPED, not as a scheduled retry");
+    }
+
+    // ── 9. The real batch path is powered by the Next-Best-Action engine ──
+
+    @Test
+    void manualBatch_isDecidedByIntelligenceEngine_andStampsProvenance() throws Exception {
+        Transaction tx = seedPayment("IT_ENG_1", Customer.CustomerSegment.STANDARD, 0.9,
+                new BigDecimal("4999"), FailureReason.NETWORK_ERROR, 0, TransactionStatus.AT_RISK);
+
+        runBatchViaApi();
+
+        RecoveryAttempt attempt = attemptRepository.findAll().stream()
+                .filter(a -> a.getTransaction() != null && tx.getId().equals(a.getTransaction().getId()))
+                .findFirst().orElseThrow(() -> new AssertionError("Batch must persist an attempt for the seeded transaction"));
+
+        // 1. Provenance: the decision came from the intelligence engine, not a heuristic or LLM pick.
+        assertEquals(RecoveryAttempt.DecisionSource.RECOVERY_INTELLIGENCE_ENGINE, attempt.getDecisionSource());
+        assertEquals(NextBestActionEngine.ENGINE_VERSION, attempt.getEngineVersion());
+        assertFalse(attempt.isLlmDriven(),
+                "llmDriven must be false: the test context has no LLM key and the engine is deterministic");
+        assertNotNull(attempt.getRecoveryState(), "Engine must detect and persist a customer recovery state");
+        assertNotNull(attempt.getDecisionTrace());
+        assertTrue(attempt.getDecisionTrace().getSteps().stream()
+                        .anyMatch(s -> s.step().equals("INTELLIGENCE") || s.step().equals("SIMULATION")),
+                "Decision trace must contain the engine's state/fatigue and simulation steps");
+
+        // 2. The engine's counterfactual simulation was persisted for this case.
+        List<CounterfactualDecision> rows = counterfactualRepository
+                .findBySourceTypeAndSourceEntityIdOrderByCreatedAtDesc("PAYMENT", tx.getId());
+        assertFalse(rows.isEmpty(), "Engine must persist one counterfactual row per simulated action");
+        assertTrue(rows.size() >= 2, "Engine must simulate multiple candidate actions, got " + rows.size());
+
+        // 3. Exactly one candidate is selected, and it is the highest INCREMENTAL NET VALUE.
+        List<CounterfactualDecision> selected = rows.stream().filter(CounterfactualDecision::isSelected).toList();
+        assertEquals(1, selected.size(), "Exactly one candidate action must be flagged selected");
+        BigDecimal bestNet = rows.stream().map(CounterfactualDecision::getIncrementalNetValue)
+                .max(BigDecimal::compareTo).orElseThrow();
+        assertEquals(0, selected.get(0).getIncrementalNetValue().compareTo(bestNet),
+                "Selected action must maximize incremental net value, not raw success probability");
+        // The persisted attempt's action equals the engine's selection (absent a documented
+        // uplift-segment override, which would be recorded as fallbackReason).
+        if (attempt.getFallbackReason() == null) {
+            assertEquals(selected.get(0).getAction(), attempt.getActionTaken(),
+                    "Persisted attempt must carry the engine-selected action");
+        }
+
+        // 4. Audit recorded the engine decision for this entity.
+        List<AuditEvent> forEntity = auditEventRepository
+                .findByEntityTypeAndEntityIdOrderByTimestampDesc("TRANSACTION", String.valueOf(tx.getId()));
+        assertTrue(forEntity.stream().anyMatch(e ->
+                        e.getEventType() == AuditEvent.EventType.AI_RECOMMENDATION_RECEIVED),
+                "Batch must audit the engine's recommendation for the transaction");
+    }
+
+    // ── 10. Outcome Memory: batch outcomes feed the context-aware learning read-model ──
+
+    @Test
+    void outcomeMemory_recordsContextAfterBatch() throws Exception {
+        seedPayment("IT_MEM_1", Customer.CustomerSegment.STANDARD, 0.9,
+                new BigDecimal("4999"), FailureReason.NETWORK_ERROR, 0, TransactionStatus.AT_RISK);
+
+        runBatchViaApi();
+
+        List<OutcomeMemoryService.MemoryRow> memory = outcomeMemory.memory();
+        assertTrue(memory.stream().anyMatch(r -> "PAYMENT".equals(r.sourceType())
+                        && "NETWORK_ERROR".equals(r.contextKey())
+                        && r.attempts() >= 1),
+                "Outcome memory must contain a PAYMENT×NETWORK_ERROR cell after the batch");
+
+        // Rows are remembered best-first by net value.
+        for (int i = 1; i < memory.size(); i++) {
+            assertTrue(memory.get(i - 1).netValue().compareTo(memory.get(i).netValue()) >= 0,
+                    "Outcome memory must be ordered by net value, best first");
+        }
     }
 
     // ── helpers ────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 package com.razorpay.recovery.recovery;
 
 /**
- * Pairs an EnforcedDecision (bounded LlmDecision + signoff metadata) with whether
+ * Pairs an EnforcedDecision (bounded RecoveryDecision + signoff metadata) with whether
  * the decision came from a live LLM call or the heuristic fallback.
  * Used internally by DecisionAgentService so the orchestrator can set
  * RecoveryAttempt.llmDriven, requiresHumanSignoff, and signoffReason accurately.
@@ -13,8 +13,8 @@ public record DecisionResult(
         String signoffReason
 ) {
 
-    /** Convenience: the bounded LlmDecision. */
-    public LlmDecision decision() { return enforced.decision(); }
+    /** Convenience: the bounded RecoveryDecision. */
+    public RecoveryDecision decision() { return enforced.decision(); }
 
     /** Legacy constructor — uses enforced's signoff info only (for tests that don't compute signoff separately). */
     public DecisionResult(EnforcedDecision enforced, boolean llmDriven) {

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { fetchActionPerformance, fetchExperiments, createExperiment } from '../api';
+import { fetchActionPerformance, fetchExperiments, fetchOutcomeMemory, createExperiment } from '../api';
 
 const fmt = (v) => (v === null || v === undefined ? '—' : `₹${Number(v).toLocaleString('en-IN')}`);
 
 export default function ActionLab() {
   const [rows, setRows] = useState([]);
   const [experiments, setExperiments] = useState([]);
+  const [memory, setMemory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [draft, setDraft] = useState({ name: '', description: '', controlPercentage: 15, treatmentPolicy: '', targetSegment: 'ALL', endDate: '' });
@@ -14,8 +15,8 @@ export default function ActionLab() {
   async function load() {
     setLoading(true);
     try {
-      const [r, e] = await Promise.all([fetchActionPerformance(), fetchExperiments()]);
-      setRows(r); setExperiments(e); setError(null);
+      const [r, e, m] = await Promise.all([fetchActionPerformance(), fetchExperiments(), fetchOutcomeMemory()]);
+      setRows(r); setExperiments(e); setMemory(m); setError(null);
     } catch (err) {
       setError('Could not load the Action Performance Lab — is the backend running on :8080?');
     } finally {
@@ -97,6 +98,44 @@ export default function ActionLab() {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Outcome Memory — context × segment priors */}
+      <div className="card" style={{ padding: '18px 20px' }}>
+        <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>OUTCOME MEMORY — WHAT HAS WORKED FOR THIS SITUATION</div>
+        <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>
+          Every executed action is remembered as a (source × failure context × customer segment × action) prior.
+          The same action can be the best move in one situation and a waste in another — the memory keeps the context.
+        </div>
+        {loading ? <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading outcome memory…</div> : memory.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: '16px 0', textAlign: 'center' }}>No memory yet — run a recovery batch and the learning loop will start remembering outcomes.</div>
+        ) : (
+          <div className="table-scroll">
+            <table className="main-table">
+              <thead>
+                <tr>
+                  {['SOURCE', 'CONTEXT', 'SEGMENT', 'ACTION', 'ATTEMPTS', 'SUCCESS RATE', 'RECOVERED', 'NET VALUE'].map(h => (
+                    <th key={h} style={{ whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {memory.slice(0, 40).map((m, i) => (
+                  <tr key={i}>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>{m.sourceType}</td>
+                    <td style={{ fontWeight: 600, color: 'var(--gold)', whiteSpace: 'nowrap' }}>{m.contextKey.replaceAll('_', ' ')}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>{m.customerSegment}</td>
+                    <td style={{ fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap', textTransform: 'capitalize' }}>{m.action.replaceAll('_', ' ').toLowerCase()}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--text-secondary)' }}>{m.attempts}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', fontWeight: 600, color: m.successRate >= 0.5 ? 'var(--green)' : 'var(--text-secondary)' }}>{(m.successRate * 100).toFixed(0)}%</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--green)' }}>{fmt(m.recovered)}</td>
+                    <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', fontWeight: 800, color: Number(m.netValue) >= 0 ? 'var(--gold-bright)' : 'var(--red)' }}>{fmt(m.netValue)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

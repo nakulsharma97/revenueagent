@@ -28,13 +28,17 @@ public class IntelligenceController {
     private final RecoveryIntelligenceService intelligence;
     private final RulesEngine rulesEngine;
     private final BoundsConfig boundsConfig;
-    private final NextBestActionEngine engine = new NextBestActionEngine();
+    private final NextBestActionEngine engine;
+    private final OutcomeMemoryService outcomeMemory;
 
     public IntelligenceController(RecoveryIntelligenceService intelligence, RulesEngine rulesEngine,
-                                  BoundsConfig boundsConfig) {
+                                  BoundsConfig boundsConfig, NextBestActionEngine engine,
+                                  OutcomeMemoryService outcomeMemory) {
         this.intelligence = intelligence;
         this.rulesEngine = rulesEngine;
         this.boundsConfig = boundsConfig;
+        this.engine = engine;
+        this.outcomeMemory = outcomeMemory;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -253,5 +257,14 @@ public class IntelligenceController {
     @GetMapping("/action-performance")
     public List<OutcomeLearningService.ActionPerformance> actionPerformance() {
         return intelligence.actionPerformance();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Outcome Memory — context × segment × action priors from history
+    // ═══════════════════════════════════════════════════════════════
+
+    @GetMapping("/outcome-memory")
+    public List<OutcomeMemoryService.MemoryRow> outcomeMemory() {
+        return outcomeMemory.memory();
     }
 }

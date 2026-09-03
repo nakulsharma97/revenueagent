@@ -2,7 +2,14 @@ package com.razorpay.recovery.recovery;
 
 import com.razorpay.recovery.config.BoundsConfig;
 import com.razorpay.recovery.audit.AuditService;
+import com.razorpay.recovery.intelligence.AnomalyDetectionService;
+import com.razorpay.recovery.intelligence.CustomerStateService;
+import com.razorpay.recovery.intelligence.DecisionConfidenceService;
+import com.razorpay.recovery.intelligence.NextBestActionEngine;
+import com.razorpay.recovery.intelligence.RecoveryFatigueService;
 import com.razorpay.recovery.intelligence.RecoveryIntelligenceService;
+import com.razorpay.recovery.intelligence.RecoveryValueOptimizer;
+import com.razorpay.recovery.intelligence.UpliftScoringService;
 import com.razorpay.recovery.recovery.mocks.MockNotificationService;
 import com.razorpay.recovery.recovery.mocks.MockPaymentGatewayService;
 import com.razorpay.recovery.customer.Customer;
@@ -62,7 +69,10 @@ class IdempotencyTest {
         boundsConfig.setHvMinAmountForDiscount(new BigDecimal("500"));
 
         var rulesEngine = new RulesEngine(boundsConfig);
-        var decisionAgentService = new DecisionAgentService(rulesEngine, boundsConfig);
+        NextBestActionEngine engine = new NextBestActionEngine(new UpliftScoringService(),
+                new RecoveryFatigueService(), new CustomerStateService(), new DecisionConfidenceService(),
+                new RecoveryValueOptimizer(), new AnomalyDetectionService());
+        var decisionAgentService = new DecisionAgentService(rulesEngine, boundsConfig, engine);
         var upliftService = new UpliftSegmentationService();
 
         orchestrator = new RecoveryOrchestratorService(

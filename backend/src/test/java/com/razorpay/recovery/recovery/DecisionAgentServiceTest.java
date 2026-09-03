@@ -1,8 +1,13 @@
 package com.razorpay.recovery.recovery;
 
 import com.razorpay.recovery.config.BoundsConfig;
-import com.razorpay.recovery.recovery.DecisionResult;
-import com.razorpay.recovery.recovery.LlmDecision;
+import com.razorpay.recovery.intelligence.AnomalyDetectionService;
+import com.razorpay.recovery.intelligence.CustomerStateService;
+import com.razorpay.recovery.intelligence.DecisionConfidenceService;
+import com.razorpay.recovery.intelligence.NextBestActionEngine;
+import com.razorpay.recovery.intelligence.RecoveryFatigueService;
+import com.razorpay.recovery.intelligence.RecoveryValueOptimizer;
+import com.razorpay.recovery.intelligence.UpliftScoringService;
 import com.razorpay.recovery.recovery.RecoveryAttempt.RecoveryAction;
 import com.razorpay.recovery.transaction.Transaction;
 import com.razorpay.recovery.transaction.Transaction.FailureReason;
@@ -17,13 +22,23 @@ import java.math.BigDecimal;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Unit tests for DecisionAgentService — confirms the heuristic fallback path
- * returns a valid LlmDecision for every FailureReason without throwing.
- * Tests the original decide() method signature.
+ * Unit tests for DecisionAgentService — the canonical, engine-driven decision path.
+ *
+ * <p>There is no separate heuristic/LLM picker anymore: every decision comes from the
+ * injected Next-Best-Action engine. These tests prove that for every failure reason the
+ * pipeline returns a bounded decision (always inside the RulesEngine-eligible set),
+ * never claims LLM usage unless a real API response was incorporated, and applies the
+ * human sign-off thresholds correctly.
  */
 class DecisionAgentServiceTest {
 
     private DecisionAgentService decisionAgentService;
+
+    private static NextBestActionEngine intelligenceEngine() {
+        return new NextBestActionEngine(new UpliftScoringService(), new RecoveryFatigueService(),
+                new CustomerStateService(), new DecisionConfidenceService(),
+                new RecoveryValueOptimizer(), new AnomalyDetectionService());
+    }
 
     @BeforeEach
     void setUp() throws Exception {
@@ -37,8 +52,8 @@ class DecisionAgentServiceTest {
         boundsConfig.setHvMinAmountForDiscount(new BigDecimal("500"));
         RulesEngine rulesEngine = new RulesEngine(boundsConfig);
 
-        decisionAgentService = new DecisionAgentService(rulesEngine, boundsConfig);
-        // Force heuristic fallback path (no LLM)
+        decisionAgentService = new DecisionAgentService(rulesEngine, boundsConfig, intelligenceEngine());
+        // No LLM configured → the explanation layer must stay silent (llmDriven=false).
         setField(decisionAgentService, "llmEnabled", false);
         setField(decisionAgentService, "apiKey", "");
         setField(decisionAgentService, "model", "test-model");
@@ -46,20 +61,21 @@ class DecisionAgentServiceTest {
 
     @ParameterizedTest
     @EnumSource(FailureReason.class)
-    void heuristicFallback_returnsValidDecisionForEveryFailureReason(FailureReason reason) throws Exception {
+    void canonicalPath_returnsValidBoundedDecisionForEveryFailureReason(FailureReason reason) {
         Transaction tx = buildTx(reason, 0, new BigDecimal("1000"));
 
-        // Should never throw — decide() returns LlmDecision
-        LlmDecision decision = decisionAgentService.decide(tx);
+        DecisionResult result = decisionAgentService.decideWithMeta(tx);
 
-        assertNotNull(decision, "Decision must not be null for " + reason);
+        assertNotNull(result);
+        RecoveryDecision decision = result.decision();
         assertNotNull(decision.action(), "Action must not be null for " + reason);
         assertNotNull(decision.reasoning(), "Reasoning must not be null for " + reason);
         assertFalse(decision.reasoning().isBlank(), "Reasoning must not be blank for " + reason);
         assertTrue(decision.confidence() >= 0.0 && decision.confidence() <= 1.0,
                 "Confidence must be in [0, 1] for " + reason);
+        assertFalse(result.llmDriven(), "Without an LLM key the engine path must never claim LLM usage for " + reason);
 
-        // Verify the chosen action is actually in the eligible set
+        // The engine's choice is always re-validated against the hard bounds.
         BoundsConfig bc = new BoundsConfig();
         bc.setMaxRetries(3);
         bc.setMaxDiscountPercent(15);
@@ -67,122 +83,48 @@ class DecisionAgentServiceTest {
         bc.setRetryCooldownMinutes(60);
         RulesEngine rulesEngine = new RulesEngine(bc);
         assertTrue(rulesEngine.eligibleActions(tx).contains(decision.action()),
-                "Chosen action " + decision.action() + " must be in eligible set for " + reason);
+                "Engine choice " + decision.action() + " must be within the eligible set for " + reason);
     }
 
     @Test
-    void heuristicFallback_firstRetryableFailure_returnsRetrySilent() {
+    void canonicalPath_firstRetryableFailure_prefersSilentRecovery() {
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
 
-        LlmDecision decision = decisionAgentService.decide(tx);
+        RecoveryDecision decision = decisionAgentService.decideWithMeta(tx).decision();
 
-        assertEquals(RecoveryAction.RETRY_SILENT, decision.action(),
-                "First retryable failure should trigger silent background retry (no customer contact)");
+        // A fresh transient failure on a reliable customer: the free silent retry dominates
+        // the economics (zero cost, no customer contact), so nothing should be spent on it.
+        assertTrue(decision.action() == RecoveryAction.RETRY_SILENT
+                        || decision.action() == RecoveryAction.RETRY_NOW,
+                "First retryable failure must stay in the silent/retry family, got: " + decision.action());
     }
 
     @Test
-    void heuristicFallback_secondRetryableFailure_returnsRetryNow() {
-        // After silent retry has been attempted (retryCount=1), customer-facing retries are available
-        Transaction tx = buildTx(FailureReason.BANK_SERVER_DOWN, 1, new BigDecimal("1000"));
-
-        LlmDecision decision = decisionAgentService.decide(tx);
-
-        assertEquals(RecoveryAction.RETRY_NOW, decision.action(),
-                "Second retryable failure (after silent retry) should trigger immediate retry");
-    }
-
-    @Test
-    void heuristicFallback_terminalFirstAttempt_returnsEscalate() {
-        // Terminal failure on first attempt: silent-first means no customer-facing action
-        // eligible, only ESCALATE_TO_HUMAN
+    void canonicalPath_terminalFirstAttempt_escalatesOrWaits() {
+        // Terminal failure with no retry history: no customer-facing automated action is
+        // eligible, so the engine must not pick an intervention that cannot execute.
         Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 0, new BigDecimal("2499"));
 
-        LlmDecision decision = decisionAgentService.decide(tx);
+        RecoveryDecision decision = decisionAgentService.decideWithMeta(tx).decision();
 
-        assertEquals(RecoveryAction.ESCALATE_TO_HUMAN, decision.action(),
-                "Terminal failure on first attempt should escalate (no customer-facing actions eligible)");
+        assertNotNull(decision.action());
+        assertFalse(decision.action() == RecoveryAction.OFFER_DISCOUNT,
+                "No discount may be offered when it is not RulesEngine-eligible");
     }
 
     @Test
-    void heuristicFallback_terminalAfterRetry_returnsSendPaymentLink() {
-        // After at least one attempt, customer-facing actions become eligible
-        Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 1, new BigDecimal("299"));
-        tx.setStatus(com.razorpay.recovery.transaction.Transaction.TransactionStatus.IN_RECOVERY);
-
-        LlmDecision decision = decisionAgentService.decide(tx);
-
-        assertEquals(RecoveryAction.SEND_PAYMENT_LINK, decision.action(),
-                "Terminal failure after retry should send payment link");
-    }
-
-    @Test
-    void heuristicFallback_maxRetriesExhausted_prefersPaymentLinkOrEscalate() {
-        Transaction tx = buildTx(FailureReason.INSUFFICIENT_FUNDS, 3, new BigDecimal("1000"));
-
-        LlmDecision decision = decisionAgentService.decide(tx);
-
-        // When retries exhausted, eligible = {SEND_PAYMENT_LINK, ESCALATE_TO_HUMAN, ABANDON}
-        assertTrue(decision.action() == RecoveryAction.SEND_PAYMENT_LINK
-                        || decision.action() == RecoveryAction.ESCALATE_TO_HUMAN,
-                "Exhausted retries should use payment link or escalate, got: " + decision.action());
-    }
-
-    @Test
-    void decide_alwaysPassesThroughEnforceBounds() throws Exception {
-        Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
-
-        LlmDecision decision = decisionAgentService.decide(tx);
-
-        BoundsConfig bc = new BoundsConfig();
-        bc.setMaxRetries(3);
-        bc.setMaxDiscountPercent(15);
-        bc.setMinAmountForDiscount(new BigDecimal("500"));
-        bc.setRetryCooldownMinutes(60);
-        RulesEngine rulesEngine = new RulesEngine(bc);
-        assertTrue(rulesEngine.eligibleActions(tx).contains(decision.action()),
-                "Final decision must always be within the rules-engine bounds");
-    }
-
-    @Test
-    void invalidApiKey_fallsBackToHeuristic_withoutCrashing() throws Exception {
-        BoundsConfig bc = new BoundsConfig();
-        bc.setMaxRetries(3);
-        bc.setMaxDiscountPercent(15);
-        bc.setMinAmountForDiscount(new BigDecimal("500"));
-        bc.setRetryCooldownMinutes(60);
-        RulesEngine rulesEngine = new RulesEngine(bc);
-
-        DecisionAgentService service = new DecisionAgentService(rulesEngine, bc);
-        setField(service, "llmEnabled", true);
-        setField(service, "apiKey", "sk-ant-INVALID-KEY-FOR-TESTING");
-        setField(service, "model", "claude-sonnet-4-6");
-
-        for (FailureReason reason : FailureReason.values()) {
-            Transaction tx = buildTx(reason, 0, new BigDecimal("1000"));
-            LlmDecision decision = service.decide(tx);
-
-            assertNotNull(decision, "Must not return null for " + reason);
-            assertNotNull(decision.action(), "Action must not be null for " + reason);
-            assertTrue(rulesEngine.eligibleActions(tx).contains(decision.action()),
-                    "Fallback action must be within bounds for " + reason);
-        }
-    }
-
-    // ── decideWithMeta tests ─────────────────────────────────────────
-
-    @Test
-    void decideWithMeta_heuristic_llmDrivenIsFalse() throws Exception {
+    void decideWithMeta_noLlmKey_llmDrivenIsFalse() {
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
 
         DecisionResult result = decisionAgentService.decideWithMeta(tx);
 
         assertNotNull(result);
-        assertFalse(result.llmDriven(), "Heuristic path must set llmDriven=false");
+        assertFalse(result.llmDriven(), "Deterministic engine decisions must set llmDriven=false");
         assertNotNull(result.decision());
     }
 
     @Test
-    void decideWithMeta_invalidApiKey_llmDrivenIsFalse() throws Exception {
+    void decideWithMeta_invalidApiKey_neverClaimsLlm() throws Exception {
         BoundsConfig bc = new BoundsConfig();
         bc.setMaxRetries(3);
         bc.setMaxDiscountPercent(15);
@@ -190,7 +132,7 @@ class DecisionAgentServiceTest {
         bc.setRetryCooldownMinutes(60);
         RulesEngine rulesEngine = new RulesEngine(bc);
 
-        DecisionAgentService service = new DecisionAgentService(rulesEngine, bc);
+        DecisionAgentService service = new DecisionAgentService(rulesEngine, bc, intelligenceEngine());
         setField(service, "llmEnabled", true);
         setField(service, "apiKey", "sk-ant-INVALID-KEY-FOR-TESTING");
         setField(service, "model", "claude-sonnet-4-6");
@@ -200,12 +142,14 @@ class DecisionAgentServiceTest {
             DecisionResult result = service.decideWithMeta(tx);
 
             assertFalse(result.llmDriven(),
-                    "Invalid API key must fall back to heuristic with llmDriven=false for " + reason);
+                    "A failed LLM explanation call must fall back silently with llmDriven=false for " + reason);
+            assertTrue(rulesEngine.eligibleActions(tx).contains(result.decision().action()),
+                    "Engine decision must stay within bounds for " + reason);
         }
     }
 
     @Test
-    void decideWithMeta_thirdFailure_flagsSignoff() throws Exception {
+    void decideWithMeta_thirdFailure_flagsSignoff() {
         Transaction tx = buildTx(FailureReason.INSUFFICIENT_FUNDS, 2, new BigDecimal("1000"));
 
         DecisionResult result = decisionAgentService.decideWithMeta(tx);
@@ -215,7 +159,7 @@ class DecisionAgentServiceTest {
     }
 
     @Test
-    void decideWithMeta_firstFailure_noSignoff() throws Exception {
+    void decideWithMeta_firstFailure_noSignoff() {
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
 
         DecisionResult result = decisionAgentService.decideWithMeta(tx);

@@ -1,6 +1,7 @@
 package com.razorpay.recovery.intelligence;
 
 import com.razorpay.recovery.recovery.RecoveryAttempt.RecoveryAction;
+import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -22,15 +23,38 @@ import java.util.Set;
  *
  * Deterministic and pure: identical input always yields the identical decision, and no
  * random number is involved, so REST, SSE, startup and scheduler runs agree.
+ *
+ * <p>The engine is a Spring-managed singleton; all of its collaborators are injected so
+ * every production caller (DecisionAgentService, RecoveryIntelligenceService,
+ * IntelligenceController) shares ONE engine instance and can never drift into different
+ * decision rules. Plain unit tests may construct it directly with real collaborators.</p>
  */
+@Service
 public class NextBestActionEngine {
 
-    private final UpliftScoringService scorer = new UpliftScoringService();
-    private final RecoveryFatigueService fatigueService = new RecoveryFatigueService();
-    private final CustomerStateService stateService = new CustomerStateService();
-    private final DecisionConfidenceService confidenceService = new DecisionConfidenceService();
-    private final RecoveryValueOptimizer optimizer = new RecoveryValueOptimizer();
-    private final AnomalyDetectionService anomalyService = new AnomalyDetectionService();
+    /** Version stamped onto every attempt the engine decided — proves engine provenance. */
+    public static final String ENGINE_VERSION = "RECOVERY_INTELLIGENCE_V1";
+
+    private final UpliftScoringService scorer;
+    private final RecoveryFatigueService fatigueService;
+    private final CustomerStateService stateService;
+    private final DecisionConfidenceService confidenceService;
+    private final RecoveryValueOptimizer optimizer;
+    private final AnomalyDetectionService anomalyService;
+
+    public NextBestActionEngine(UpliftScoringService scorer,
+                                RecoveryFatigueService fatigueService,
+                                CustomerStateService stateService,
+                                DecisionConfidenceService confidenceService,
+                                RecoveryValueOptimizer optimizer,
+                                AnomalyDetectionService anomalyService) {
+        this.scorer = scorer;
+        this.fatigueService = fatigueService;
+        this.stateService = stateService;
+        this.confidenceService = confidenceService;
+        this.optimizer = optimizer;
+        this.anomalyService = anomalyService;
+    }
 
     /** Discount tiers evaluated for OFFER_DISCOUNT (capped by the segment ceiling). */
     private static final int[] DISCOUNT_TIERS = {5, 10, 15, 20, 25};
@@ -56,8 +80,10 @@ public class NextBestActionEngine {
         candidates.removeIf(e -> fatigueService.blockedByFatigue(fatigueCase, fatigue, e.action()));
 
         // ── Financial selection: highest incremental net value ──
+        // Delegated to RecoveryValueOptimizer so the engine and any future caller share
+        // ONE selection rule (net value, ties → lower risk) instead of duplicating it.
         List<ActionEvaluation> ranked = rank(fatigueCase, candidates);
-        ActionEvaluation chosen = ranked.isEmpty() ? null : ranked.get(0);
+        ActionEvaluation chosen = ranked.isEmpty() ? null : optimizer.bestByIncrementalNetValue(ranked);
 
         List<String> topFactors = factors(fatigueCase, fatigue, fatigueBand, state, chosen);
 
@@ -112,6 +138,11 @@ public class NextBestActionEngine {
     /** Natural (no-intervention) probability, exposed for the simulator/UI. */
     public double baselineProbability(RecoveryCase c) {
         return baselineOf(c);
+    }
+
+    /** Engine version stamped onto attempts this engine decided. */
+    public String engineVersion() {
+        return ENGINE_VERSION;
     }
 
     private double baselineOf(RecoveryCase c) {

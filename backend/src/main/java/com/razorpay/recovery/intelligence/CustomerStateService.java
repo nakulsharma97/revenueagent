@@ -1,5 +1,7 @@
 package com.razorpay.recovery.intelligence;
 
+import org.springframework.stereotype.Service;
+
 import java.math.BigDecimal;
 
 /**
@@ -7,6 +9,7 @@ import java.math.BigDecimal;
  * decision ledger and influences which interventions the engine considers appropriate.
  * Deterministic — the same features always produce the same state.
  */
+@Service
 public class CustomerStateService {
 
     private static final BigDecimal HIGH_AMOUNT = new BigDecimal("100000");

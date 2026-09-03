@@ -41,6 +41,14 @@ public class RecoveryOutcome {
     @Column(nullable = false, length = 32)
     private RecoveryAction action;
 
+    /**
+     * The failure/abandonment context the outcome was observed in (e.g. CARD_EXPIRED,
+     * PRICE_HESITATION, OVERDUE_60+). Keeps the Outcome Memory contextual — the same
+     * action can be remembered differently for different situations.
+     */
+    @Column(length = 32)
+    private String contextKey;
+
     /** Whether the action converted into payment. */
     private boolean success;
 
@@ -67,6 +75,7 @@ public class RecoveryOutcome {
                 : attempt.getReceivable() != null ? attempt.getReceivable().getId() : null;
         o.setSourceEntityId(entityId);
         o.setAction(attempt.getActionTaken());
+        o.setContextKey(contextOf(attempt));
         boolean success = attempt.getOutcome() == com.razorpay.recovery.recovery.RecoveryAttempt.AttemptOutcome.SUCCESS;
         o.setSuccess(success);
         o.setAmountRecovered(attempt.getAmountRecovered() == null ? BigDecimal.ZERO : attempt.getAmountRecovered());
@@ -90,5 +99,20 @@ public class RecoveryOutcome {
         }
         o.setCreatedAt(attempt.getExecutedAt() == null ? LocalDateTime.now() : attempt.getExecutedAt());
         return o;
+    }
+
+    /** The context label for the outcome: failure reason, abandonment reason, or overdue band. */
+    private static String contextOf(com.razorpay.recovery.recovery.RecoveryAttempt attempt) {
+        if (attempt.getTransaction() != null && attempt.getTransaction().getFailureReason() != null) {
+            return attempt.getTransaction().getFailureReason().name();
+        }
+        if (attempt.getCheckoutSession() != null && attempt.getCheckoutSession().getAbandonmentReason() != null) {
+            return attempt.getCheckoutSession().getAbandonmentReason().name();
+        }
+        if (attempt.getReceivable() != null) {
+            int days = attempt.getReceivable().getDaysOverdue();
+            return days >= 60 ? "OVERDUE_60+" : days >= 30 ? "OVERDUE_30_59" : "OVERDUE_1_29";
+        }
+        return null;
     }
 }

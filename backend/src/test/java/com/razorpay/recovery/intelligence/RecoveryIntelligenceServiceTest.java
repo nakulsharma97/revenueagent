@@ -56,10 +56,14 @@ class RecoveryIntelligenceServiceTest {
         bounds.setHvMaxRetries(5);
         bounds.setHvMaxDiscountPercent(25);
         bounds.setHvMinAmountForDiscount(new BigDecimal("500"));
+        NextBestActionEngine engine = new NextBestActionEngine(new UpliftScoringService(),
+                new RecoveryFatigueService(), new CustomerStateService(), new DecisionConfidenceService(),
+                new RecoveryValueOptimizer(), new AnomalyDetectionService());
         service = new RecoveryIntelligenceService(counterfactualRepository, outcomeRepository,
                 reviewRepository, anomalyRepository, auditService, bounds, new RulesEngine(bounds),
                 attemptRepository, experimentRepository, transactionRepository,
-                checkoutSessionRepository, receivableRepository);
+                checkoutSessionRepository, receivableRepository,
+                engine, new OutcomeLearningService());
     }
 
     private RecoveryAttempt paymentAttempt(int retries, boolean signoff) {

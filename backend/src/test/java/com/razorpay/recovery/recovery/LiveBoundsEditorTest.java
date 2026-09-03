@@ -1,7 +1,7 @@
 package com.razorpay.recovery.recovery;
 
 import com.razorpay.recovery.config.BoundsConfig;
-import com.razorpay.recovery.recovery.LlmDecision;
+import com.razorpay.recovery.recovery.RecoveryDecision;
 import com.razorpay.recovery.recovery.RecoveryAttempt.RecoveryAction;
 import com.razorpay.recovery.transaction.Transaction;
 import com.razorpay.recovery.transaction.Transaction.FailureReason;
@@ -72,7 +72,7 @@ class LiveBoundsEditorTest {
     @Test
     void requiresHumanSignoff_reflectsLoweredCeiling() {
         Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 0, new BigDecimal("1000"));
-        LlmDecision proposed = new LlmDecision(
+        RecoveryDecision proposed = new RecoveryDecision(
                 RecoveryAction.OFFER_DISCOUNT, "Discount offer", 0.7, 10);
 
         // With 15% ceiling, 10% is within bounds — no signoff

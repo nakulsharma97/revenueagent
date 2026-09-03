@@ -6,7 +6,7 @@ import com.razorpay.recovery.intelligence.RecoveryIntelligenceService;
 import com.razorpay.recovery.customer.Customer;
 import com.razorpay.recovery.recovery.DecisionResult;
 import com.razorpay.recovery.recovery.EnforcedDecision;
-import com.razorpay.recovery.recovery.LlmDecision;
+import com.razorpay.recovery.recovery.RecoveryDecision;
 import com.razorpay.recovery.recovery.RecoveryAttempt;
 import com.razorpay.recovery.recovery.RecoveryAttempt.RecoveryAction;
 import com.razorpay.recovery.transaction.Transaction;
@@ -101,7 +101,7 @@ class SignoffIntegrationTest {
         when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         DecisionResult mockResult = new DecisionResult(
-                EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "Retry one more time", 0.6, null)),
+                EnforcedDecision.ok(new RecoveryDecision(RecoveryAction.RETRY_NOW, "Retry one more time", 0.6, null)),
                 false,
                 true,
                 "3rd consecutive failure — requires human review before final disposition.");
@@ -127,7 +127,7 @@ class SignoffIntegrationTest {
         when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         DecisionResult mockResult = new DecisionResult(
-                EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "First failure, retry", 0.6, null)),
+                EnforcedDecision.ok(new RecoveryDecision(RecoveryAction.RETRY_NOW, "First failure, retry", 0.6, null)),
                 false);
         when(decisionAgentService.decideWithMeta(eq(tx), eq(STD), any(DecisionTrace.class))).thenReturn(mockResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(true);
@@ -149,7 +149,7 @@ class SignoffIntegrationTest {
         when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         DecisionResult mockResult = new DecisionResult(
-                EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_SCHEDULED, "Schedule retry", 0.55, null)),
+                EnforcedDecision.ok(new RecoveryDecision(RecoveryAction.RETRY_SCHEDULED, "Schedule retry", 0.55, null)),
                 false);
         when(decisionAgentService.decideWithMeta(eq(tx), eq(STD), any(DecisionTrace.class))).thenReturn(mockResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(false);
@@ -173,7 +173,7 @@ class SignoffIntegrationTest {
         when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         EnforcedDecision capped = new EnforcedDecision(
-                new LlmDecision(RecoveryAction.OFFER_DISCOUNT, "Discount [capped by RulesEngine to policy max]", 0.7, 15),
+                new RecoveryDecision(RecoveryAction.OFFER_DISCOUNT, "Discount [capped by RulesEngine to policy max]", 0.7, 15),
                 true,
                 "LLM proposed 20% discount, capped to policy max 15%"
         );
@@ -203,9 +203,9 @@ class SignoffIntegrationTest {
         when(decisionAgentService.segmentOf(tx2)).thenReturn(STD);
 
         DecisionResult result1 = new DecisionResult(
-                EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "Retry", 0.6, null)), false);
+                EnforcedDecision.ok(new RecoveryDecision(RecoveryAction.RETRY_NOW, "Retry", 0.6, null)), false);
         DecisionResult result2 = new DecisionResult(
-                EnforcedDecision.ok(new LlmDecision(RecoveryAction.SEND_PAYMENT_LINK, "Send link", 0.5, null)), false);
+                EnforcedDecision.ok(new RecoveryDecision(RecoveryAction.SEND_PAYMENT_LINK, "Send link", 0.5, null)), false);
 
         when(decisionAgentService.decideWithMeta(eq(tx1), eq(STD), any(DecisionTrace.class))).thenReturn(result1);
         when(decisionAgentService.decideWithMeta(eq(tx2), eq(STD), any(DecisionTrace.class))).thenReturn(result2);
@@ -255,7 +255,7 @@ class SignoffIntegrationTest {
         when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         DecisionResult llmResult = new DecisionResult(
-                EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "LLM decision", 0.85, null)),
+                EnforcedDecision.ok(new RecoveryDecision(RecoveryAction.RETRY_NOW, "engine decision", 0.85, null)),
                 true);
         when(decisionAgentService.decideWithMeta(eq(tx), eq(STD), any(DecisionTrace.class))).thenReturn(llmResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(true);
@@ -277,7 +277,7 @@ class SignoffIntegrationTest {
         when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         DecisionResult heuristicResult = new DecisionResult(
-                EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "Rules-only mode: first failure", 0.6, null)),
+                EnforcedDecision.ok(new RecoveryDecision(RecoveryAction.RETRY_NOW, "Rules-only mode: first failure", 0.6, null)),
                 false);
         when(decisionAgentService.decideWithMeta(eq(tx), eq(STD), any(DecisionTrace.class))).thenReturn(heuristicResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(true);

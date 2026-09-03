@@ -37,6 +37,7 @@ frontend/  React + Vite — Command Center, Simulator, Human Review, Action Lab 
 | Decision confidence | `intelligence/DecisionConfidenceService.java` | <60% → HUMAN_REVIEW, ≥85% → AUTO_EXECUTE |
 | Counterfactual decisions (persisted) | `intelligence/CounterfactualDecision.java` | every simulation row is stored; the selected row is flagged |
 | Outcome learning | `intelligence/RecoveryOutcome.java`, `OutcomeLearningService.java` | per-action success/net-value stats feed the Action Lab |
+| Outcome Memory | `intelligence/OutcomeMemoryService.java`, `GET /api/intelligence/outcome-memory` | history remembered as (source × failure context × segment × action) priors — what has actually worked for THIS situation, best net value first |
 | Human review queue | `intelligence/HumanReviewCase.java` | approve / override / reject with audit trail |
 | Anomaly detection | `intelligence/AnomalyDetectionService.java` | large failures, repeat failures, fatigue risk → HIGH/CRITICAL route to review |
 | Experimentation policy | `intelligence/RecoveryExperiment.java` | declared control/treatment policies, kept out of per-item decisions |
@@ -47,6 +48,8 @@ frontend/  React + Vite — Command Center, Simulator, Human Review, Action Lab 
 |---|---|
 | Bounded workflow (hard limits enforced before any engine output) | `backend/.../recovery/RulesEngine.java` |
 | Decision layer: engine-driven action + optional LLM explanation | `backend/.../recovery/DecisionAgentService.java` |
+| Engine wiring | `intelligence/*` are Spring beans | one `NextBestActionEngine` singleton is constructor-injected everywhere — no manual `new` in production code |
+| Decision provenance | `RecoveryAttempt.decisionSource` / `.engineVersion` | every attempt records `RECOVERY_INTELLIGENCE_ENGINE` + `RECOVERY_INTELLIGENCE_V1` (or `MANUAL_HUMAN_OVERRIDE` after a review override) — proves which engine made the call |
 | End-to-end loop across all 3 revenue sources | `backend/.../recovery/RecoveryOrchestratorService.java` |
 | Honest metrics (recovered − intervention cost) | `backend/.../metrics/MetricsService.java` |
 | Realistic synthetic batch (320 items auto-seeded on startup) | `backend/.../config/DataSeeder.java` |

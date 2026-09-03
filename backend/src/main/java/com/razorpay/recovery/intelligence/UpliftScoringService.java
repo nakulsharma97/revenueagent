@@ -1,6 +1,7 @@
 package com.razorpay.recovery.intelligence;
 
 import com.razorpay.recovery.recovery.RecoveryAttempt.RecoveryAction;
+import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -24,6 +25,7 @@ import java.math.RoundingMode;
  *   <li>fatigue reduces discount effectiveness (customers tune out incentives).</li>
  * </ul>
  */
+@Service
 public class UpliftScoringService {
 
     private static final double SMS_COST = 0.35;

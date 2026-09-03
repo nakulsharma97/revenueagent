@@ -103,6 +103,21 @@ public class RecoveryAttempt {
     /** Recovery-fatigue score at decision time (0 fresh → 1 severe). */
     private double fatigueScore;
 
+    // ── Decision provenance (who produced this decision — for audits & the ledger) ──
+
+    /** Which decision path produced this attempt's action. */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 40)
+    private DecisionSource decisionSource;
+
+    /** Engine/decision version that produced the action (e.g. RECOVERY_INTELLIGENCE_V1). */
+    @Column(length = 32)
+    private String engineVersion;
+
+    /** Why a fallback path produced this decision instead of the engine (null when the engine decided). */
+    @Column(length = 500)
+    private String fallbackReason;
+
     /**
      * Structured multi-step trace showing exactly how the agent reached its decision.
      * Built incrementally by RulesEngine and DecisionAgentService — never reconstructed.
@@ -116,6 +131,16 @@ public class RecoveryAttempt {
 
     public enum SourceType {
         PAYMENT, CHECKOUT, RECEIVABLE
+    }
+
+    /** Who/what produced the decision recorded on this attempt. */
+    public enum DecisionSource {
+        /** The Next-Best-Action intelligence engine (deterministic, all live paths). */
+        RECOVERY_INTELLIGENCE_ENGINE,
+        /** A documented fallback (no engine) produced the action. */
+        FALLBACK_HEURISTIC,
+        /** A human explicitly overrode the machine's decision in the review queue. */
+        MANUAL_HUMAN_OVERRIDE
     }
 
     public enum RecoveryAction {
