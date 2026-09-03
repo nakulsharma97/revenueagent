@@ -1,106 +1,82 @@
-# Project Brief — AI Revenue Recovery Agent
-**Razorpay AI Buildathon · Track 03: AI Revenue Recovery**
+# PROJECT BRIEF — RecoveryOS
 
-This is the systematic spec the implementation follows. Written so it can also be handed to any AI coding tool (Claude Code, Cursor, etc.) as a standalone build prompt.
+**RecoveryOS — An Autonomous Revenue Recovery Intelligence System**
 
----
+Razorpay Build submission (Track 03). Backend: Spring Boot 3 / Java 21 / H2 (or MySQL). Frontend: React + Vite. No external paid services required to run the full demo (an Anthropic key is optional and used only for the *explanation* layer).
 
-## 1. Problem statement (from the official track brief)
+## The idea
 
-> Build an agent that detects revenue at risk, determines the right intervention, and executes a bounded recovery workflow — from payment failures and checkout abandonment to overdue receivables.
->
-> **The bar:** Don't just identify the problem. Show measured money recovered across a batch, with honest metrics (including the cost of each intervention).
+Most payment-recovery products answer one question: *"which failed payment should I retry?"*
 
-Three words carry the grading weight, and the design below is built around them:
-- **"Detects"** → a real signal pipeline, not a hardcoded list.
-- **"Bounded"** → the AI never acts outside hard limits a human set — this is what separates an "agent" from "an LLM with API access."
-- **"Measured"** → a revenue-recovered number that is defensible, not decorative (recovered minus what it cost to recover it).
+RecoveryOS answers a different, higher-value question:
 
-## 2. Scope decision
+> **For this specific customer, at this specific time, what is the NEXT BEST RECOVERY ACTION that creates the highest incremental net revenue?**
 
-Of the six example directions (checkout drop-off, failed-subscription recovery, B2B receivables, mandate retry, Hinglish voice recovery, promise-to-pay tracker), this build picks **one deep, well-scoped vertical slice** rather than a shallow pass at all six:
+Instead of one retry policy, the system treats every case as a portfolio of possible actions — **do nothing, retry now, retry later, silent retry, reminder, payment link, 5–25% discount, payment plan, escalation, stop** — counterfactually simulates each one, prices its expected net value, and executes only the economically best action that also satisfies hard policy bounds. Then it records the outcome and learns.
 
-**Primary: Failed-subscription payment recovery (dunning management).**
-Rationale: it has a clean, closed-loop, measurable unit (one failed transaction → one resolved outcome), realistic synthetic data is easy to generate credibly, and it maps directly onto the requester's existing Spring Boot + MySQL skill set — no unfamiliar ML training pipeline required to hit the bar.
+## The pipeline
 
-Checkout-abandonment recovery and B2B overdue-receivable recovery are architecturally identical (same detect → diagnose → decide → execute → measure loop), and the shipped implementation builds all three source types on that one shared loop — `RecoveryOrchestratorService.runBatchWithCallback()` is the single processing core used by the REST batch, the SSE stream, the startup auto-run, and the scheduler, so every source gets identical bounded-workflow handling. Receivables additionally carry promise-to-pay tracking; all three feed the uplift control/treatment analysis.
+```
+Transaction/abandonment/invoice
+        ↓
+Feature builder (amount, cause, retries, reliability, segment)
+        ↓
+Customer state analysis (NEW_FAILURE → … → STOP_INTERVENTION)
+        ↓
+Recovery-fatigue score (0 fresh → 1 severe)
+        ↓
+Counterfactual simulation of EVERY eligible action
+        ↓
+Net value = expected recovery − discount cost − intervention cost − risk penalty
+        ↓
+Policy constraints (RulesEngine bounds + uplift segment + fatigue policy)
+        ↓
+NEXT BEST ACTION (highest valid incremental net value)
+        ↓
+Confidence band → automation policy (≥85% auto · 60–85% safe · <60% human)
+        ↓
+Bounded execution
+        ↓
+Outcome recorded → Action Performance Lab / outcome learning
+```
 
-## 3. Non-negotiable constraints ("bounded workflow")
+Key property: **the action is always chosen by the deterministic structured engine.** An optional LLM may only explain the choice in natural language afterwards (`llmDriven=true` only when a real API response was incorporated; otherwise it stays false — nothing is faked).
 
-The agent must never act outside these, regardless of what the LLM proposes:
+## Why it is not a generic retry dashboard
 
-| Rule | Limit |
+1. **Counterfactual decisions are first-class data.** Every batch run persists one row per simulated action (`counterfactual_decisions`), flagging the selected row — the UI renders the full “what else was considered” bar chart per decision.
+2. **Incremental value, not headline success.** The engine optimises recovery *lift* over a natural baseline and subtracts the true cost of margin (discounts) and risk. It will refuse a “90% success” discount that gives away more margin than it creates.
+3. **Cause-aware economics.** Discounts are barely priced for transient network/UPI failures (they do not fix a timeout) but are meaningful for price-hesitant carts and method-blocked cardholders; pay-links dominate when the customer must act themselves.
+4. **Fatigue is a first-class constraint.** After repeated touchpoints the engine de-escalates: drops discounts → drops contact → hands to a human. No spam.
+5. **Humans are in the loop by policy, not by accident.** Confidence < 60%, last retry before the segment limit, discount-cap events and HIGH/CRITICAL anomalies all route to the Human Review Queue, where a reviewer can approve, override or reject — audited.
+6. **Outcome learning is wired.** Every execution produces a `recovery_outcome` row; the Action Performance Lab ranks actions by *net* value and exposes the data shape a future ML model would train on.
+7. **Experimentation is declared, not mixed in.** Control/treatment assignment lives in ingestion (`isControlGroup` + uplift segmentation); `recovery_experiments` documents what is being tested, on which segment, and at what control percentage — experiment logic never touches per-entity decisions.
+
+## Domain vocabulary
+
+| Term | Meaning |
 |---|---|
-| Max retry attempts per transaction | 3 (STANDARD) · 5 (HIGH_VALUE) |
-| Cooldown between retries | 60 minutes |
-| Max discount the agent can offer | 15% (STANDARD) · 25% (HIGH_VALUE) |
-| Minimum transaction amount eligible for a discount | ₹500 |
-| Actions requiring human sign-off | Anything above the discount ceiling, or the last retry before the segment's limit |
+| Next-Best-Action | the single action with the highest valid incremental net value |
+| Incremental net value | expected net recovery minus what the customer would pay anyway |
+| Counterfactual decision | persisted row of “what if action X had run” |
+| Customer recovery state | NEW_FAILURE · SOFT_RISK · REPEATED_FAILURE · HIGH_VALUE_AT_RISK · RECOVERY_FATIGUE · LIKELY_TO_SELF_RECOVER · DISCOUNT_SENSITIVE · HUMAN_ATTENTION_REQUIRED · STOP_INTERVENTION |
+| Fatigue | 0–1 score → LOW / MODERATE / HIGH / SEVERE automation bands |
+| Confidence policy | ≥0.85 AUTO_EXECUTE · 0.60–0.85 SAFE_ACTION_ONLY · <0.60 HUMAN_REVIEW |
+| Review case | approve / override / reject a recommendation (audited) |
+| Outcome record | the training row after an action executes |
 
-These are enforced in plain Java (`RulesEngine`), evaluated **before** any LLM output is allowed to execute. The LLM proposes; the rules engine disposes.
+## Modules (backend `com.razorpay.recovery.intelligence`)
 
-## 4. System design
+`NextBestActionEngine`, `UpliftScoringService`, `RecoveryFatigueService`, `CustomerStateService`, `DecisionConfidenceService`, `RecoveryValueOptimizer`, `AnomalyDetectionService`, `OutcomeLearningService`, `RecoveryIntelligenceService` (transactional coordinator), plus persisted entities `CounterfactualDecision`, `RecoveryOutcome`, `HumanReviewCase`, `RecoveryAnomaly`, `RecoveryExperiment`. The existing bounded core — `RulesEngine`, `RecoveryOrchestratorService` (single processing core for REST + SSE + startup + scheduler), DTO API layer, idempotency, audit — is preserved and used unchanged where appropriate.
 
-```
-Synthetic transaction feed (seeded, realistic decline codes)
-        │
-        ▼
- [1] Detection        — is this transaction at risk? (status = failed/past-due)
-        │
-        ▼
- [2] Diagnosis         — classify failure_reason → retryable vs terminal
-        │
-        ▼
- [3] Decision Agent     — RulesEngine (hard bounds) → LLM (reasoning + choice) → bounds re-check
-        │
-        ▼
- [4] Execution          — mock payment gateway / mock notification service
-        │
-        ▼
- [5] Metrics Ledger     — recovered ₹, intervention cost, net recovered, recovery rate
-        │
-        ▼
- [6] Dashboard (React)  — funnel, revenue chart, per-transaction reasoning trace
-```
+## New tables
 
-### Why the LLM sits *inside* a rules boundary, not in front of it
-A judge scoring "strictly defense-only, bounded workflow" is explicitly checking that the AI cannot freelance. Architecturally: `RulesEngine.eligibleActions(transaction)` returns an allow-list; the LLM can only pick **from** that allow-list and justify the pick — it cannot invent a 7th retry or a 40% discount. This is the single most important design decision in the project and should be the first thing said out loud in the demo.
+Created automatically by `ddl-auto` (H2 `create-drop` / MySQL `update`): `counterfactual_decisions`, `recovery_outcomes`, `human_review_cases`, `recovery_anomalies`, `recovery_experiments`; columns `discountPercent`, `recoveryState`, `fatigueScore` added to `recovery_attempts`.
 
-## 5. Tech stack
+## Determinism
 
-| Layer | Choice | Why |
-|---|---|---|
-| Backend | Spring Boot 3 / Java 21 | Existing strength; `@Scheduled` reused for retry timing |
-| DB | MySQL (H2 in-memory for zero-setup local demo) | Relational fit for ledger-style data |
-| Decision layer | Rules engine (plain Java) + Claude API (`claude-sonnet-4-6`) for reasoning/message drafting | Keeps "AI" bounded and explainable, not a black box |
-| Frontend | React + Vite, Recharts | Matches existing stack; live charts for the "measured" requirement |
-| Mock services | Hand-rolled `MockPaymentGatewayService`, `MockNotificationService` | No real Razorpay integration needed for a buildathon demo — judges care about the decision logic, not gateway plumbing |
+The engine and all scenario expectations are deterministic (no randomness in decisions). Demo data is seeded with a fixed random seed for outcome draws, so recovery *numbers* vary slightly per run — docs never quote fixed revenue totals; they quote fixed *decisions*. See “Predictable demo scenarios” in the README for the ten named cases (self-heal → silent retry, dead card → pay-link, high-value → wider discount ceiling, fatigued → stop, big-ticket → anomaly + review, etc.).
 
-## 6. Data model
+## Screens
 
-`customers → subscriptions → transactions → recovery_attempts`, plus `checkout_sessions`, `receivables`, and an immutable `audit_events` trail. Full schema and entities live in `backend/src/main/java/com/razorpay/recovery/` (per-aggregate packages: `transaction/`, `checkout/`, `receivable/`, `customer/`, `subscription/`, `recovery/`, `audit/`). API responses use DTOs mapped inside service-layer transactions (`api/RecoveryApiService`), so `spring.jpa.open-in-view=false` is safe and no `LazyInitializationException` can reach the wire.
-
-## 7. What "measured" means here — the metrics that must appear in the demo
-
-- Total transactions at risk (batch size)
-- Revenue recovered (₹)
-- Recovery rate (%)
-- Total intervention cost (discounts given + messaging cost)
-- **Net revenue recovered = recovered − cost** ← the number that actually answers the brief
-- Baseline comparison: net recovered *with* the agent vs. a naive "retry everything once" baseline — this single chart is the strongest evidence of value in a 3-minute judge walkthrough
-
-## 8. Build order (time-boxed)
-
-1. Schema + synthetic seed data (200–500 transactions, realistic decline-code distribution)
-2. `RulesEngine` — works end-to-end with zero AI dependency (fallback path; de-risks the demo if the LLM API is unreachable on stage)
-3. `DecisionAgentService` — LLM call layered on top, same interface, feature-flagged
-4. Mock execution + outcome simulation
-5. Metrics aggregation + dashboard
-6. Polish: reasoning-trace UI, baseline-comparison chart
-
-## 9. Demo script (for the judging bar)
-
-1. Show the dashboard with 320 auto-seeded at-risk items (200 payment failures + 80 abandoned checkouts + 40 overdue receivables) — stat cards show the batch size, recovery rate, and net revenue. A recovery batch has already auto-run on startup.
-2. Click **Run Batch** — the scrolling ledger tape populates, stat cards update, and the Decision Ledger fills with the agent's per-transaction reasoning.
-3. Click any row in the Decision Ledger to expand the agent's reasoning and the full decision trace (eligibility → proposal → bounds check → execution), including whether the decision was LLM-driven or the rules-only fallback.
-4. End on the net-recovered-vs-baseline chart — the headline number. Read it off the screen: the seeded dataset and mock outcomes are deterministic (fixed Random seed 42), but figures are computed live from the actual batch, so every dashboard number is internally consistent by construction.
+Command Center · Recovery Simulator · Human Review · Action Lab (performance + experiments) · Bound Register · Transactions · Actions · Decision Ledger (with counterfactual + timeline detail) · Reports · Alerts · Settings.

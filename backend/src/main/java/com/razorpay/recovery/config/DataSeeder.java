@@ -31,6 +31,7 @@ public class DataSeeder implements CommandLineRunner {
     private final CheckoutSessionRepository checkoutSessionRepository;
     private final ReceivableRepository receivableRepository;
     private final RecoveryOrchestratorService orchestrator;
+    private final com.razorpay.recovery.intelligence.RecoveryExperimentRepository experimentRepository;
     private final Random random = new Random(42);
 
     /** Set false in tests (src/test/resources/application.properties) so each test controls its own data. */
@@ -90,13 +91,15 @@ public class DataSeeder implements CommandLineRunner {
                        TransactionRepository transactionRepository,
                        CheckoutSessionRepository checkoutSessionRepository,
                        ReceivableRepository receivableRepository,
-                       RecoveryOrchestratorService orchestrator) {
+                       RecoveryOrchestratorService orchestrator,
+                       com.razorpay.recovery.intelligence.RecoveryExperimentRepository experimentRepository) {
         this.customerRepository = customerRepository;
         this.subscriptionRepository = subscriptionRepository;
         this.transactionRepository = transactionRepository;
         this.checkoutSessionRepository = checkoutSessionRepository;
         this.receivableRepository = receivableRepository;
         this.orchestrator = orchestrator;
+        this.experimentRepository = experimentRepository;
     }
 
     @Override
@@ -120,7 +123,13 @@ public class DataSeeder implements CommandLineRunner {
         // 4. Seed 40 overdue receivables
         seedReceivables(40);
 
-        // 5. Auto-run a recovery batch so dashboard shows real data on first load
+        // 5. Seed deterministic, named demo scenarios (predictable Next-Best-Action outcomes)
+        seedDemoScenarios();
+
+        // 6. Seed declared experimentation policies
+        seedExperiments();
+
+        // 7. Auto-run a recovery batch so dashboard shows real data on first load
         try {
             var results = orchestrator.runBatch();
             org.slf4j.LoggerFactory.getLogger(DataSeeder.class)
@@ -129,6 +138,163 @@ public class DataSeeder implements CommandLineRunner {
             org.slf4j.LoggerFactory.getLogger(DataSeeder.class)
                 .error("DataSeeder: Auto batch failed — {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Deterministic named scenarios for the hackathon walkthrough. Each entity is chosen
+     * so the Next-Best-Action engine (pure, deterministic) produces a predictable,
+     * explainable decision — see docs/DEMO_SCRIPT.md "Predictable demo scenarios".
+     */
+    private void seedDemoScenarios() {
+        // S1 — LIKELY_TO_SELF_RECOVER: reliable customer, transient blip → free silent retry only.
+        scenarioPayment("Riya Sharma", "riya@example.com", 0.88, new BigDecimal("9999"),
+                FailureReason.NETWORK_ERROR, 0, Customer.CustomerSegment.STANDARD, "pay_scen_self_heal");
+
+        // S2 — terminal card, customer must act → SEND_PAYMENT_LINK beats a wasted discount.
+        scenarioPayment("Aarav Mehta", "aarav@example.com", 0.65, new BigDecimal("4999"),
+                FailureReason.CARD_EXPIRED, 1, Customer.CustomerSegment.STANDARD, "pay_scen_new_card");
+
+        // S3 — transient UPI timeout after one failed retry → retry inside the recovery window.
+        scenarioPayment("Kabir Nair", "kabir@example.com", 0.55, new BigDecimal("2000"),
+                FailureReason.UPI_TIMEOUT, 1, Customer.CustomerSegment.STANDARD, "pay_scen_retry_window");
+
+        // S4 — HIGH_VALUE customer, insufficient funds, 2 failed attempts → careful incentive
+        //      within the HIGH_VALUE ceiling (tiers up to 25% are simulated, > the 15% standard cap).
+        scenarioPayment("Meera Iyer", "meera@example.com", 0.80, new BigDecimal("15999"),
+                FailureReason.INSUFFICIENT_FUNDS, 2, Customer.CustomerSegment.HIGH_VALUE, "pay_scen_hv_care");
+
+        // S5 — 3rd failure approaches the segment's retry limit → the final retry is flagged
+        //      for human sign-off (review case created) rather than executed silently.
+        scenarioPayment("Dev Rao", "dev@example.com", 0.30, new BigDecimal("899"),
+                FailureReason.UPI_PIN_MISMATCH, 2, Customer.CustomerSegment.STANDARD, "pay_scen_signoff");
+
+        // S6 — very large failed payment → anomaly HIGH + human-attention state + review case.
+        scenarioPayment("Zoya Khan", "zoya@example.com", 0.50, new BigDecimal("150000"),
+                FailureReason.CARD_STOLEN_FLAG, 1, Customer.CustomerSegment.STANDARD, "pay_scen_big_ticket");
+
+        // Checkout — price-hesitant high-value cart → discount offer is the next best action.
+        scenarioCheckout("Kavya Singh", "kavya@example.com", new BigDecimal("24999"),
+                CheckoutSession.AbandonmentReason.PRICE_HESITATION, "chk_scen_price_hes");
+
+        // Checkout — high-intent shopper who got distracted → direct payment link.
+        scenarioCheckout("Nikhil Verma", "nikhil@example.com", new BigDecimal("9999"),
+                CheckoutSession.AbandonmentReason.DISTRACTED_NO_COMPLETION, "chk_scen_link");
+
+        // Receivable — long-overdue B2B invoice → payment-plan offer.
+        scenarioReceivable("Metro Logistics", "metro@example.com", new BigDecimal("250000"), 60,
+                false, "inv_scen_plan");
+
+        // Receivable — broken promise-to-pay, still inside the no-plan window → follow-up call.
+        scenarioReceivable("GreenLeaf Foods", "accounts@greenleaf.in", new BigDecimal("85000"), 10,
+                true, "inv_scen_promise");
+
+        org.slf4j.LoggerFactory.getLogger(DataSeeder.class)
+                .info("DataSeeder: Seeded {} named demo scenarios for the RecoveryOS walkthrough", 10);
+    }
+
+    private void scenarioPayment(String name, String email, double reliability, BigDecimal amount,
+                                 FailureReason reason, int retryCount,
+                                 Customer.CustomerSegment segment, String eventId) {
+        Customer customer = new Customer();
+        customer.setName(name);
+        customer.setEmail(email);
+        customer.setPaymentReliabilityScore(reliability);
+        customer.setCustomerSegment(segment);
+        customerRepository.save(customer);
+
+        Subscription sub = new Subscription();
+        sub.setCustomer(customer);
+        sub.setPlanName(amount.doubleValue() >= 10000 ? "Enterprise" : "Pro");
+        sub.setAmount(amount);
+        sub.setBillingCycle("MONTHLY");
+        sub.setStatus(Subscription.SubscriptionStatus.PAST_DUE);
+        subscriptionRepository.save(sub);
+
+        Transaction tx = new Transaction();
+        tx.setSubscription(sub);
+        tx.setAmount(amount);
+        tx.setStatus(retryCount > 0 ? TransactionStatus.IN_RECOVERY : TransactionStatus.AT_RISK);
+        tx.setFailureReason(reason);
+        tx.setRetryCount(retryCount);
+        tx.setCreatedAt(LocalDateTime.now().minusHours(5 + retryCount * 3));
+        tx.setEventId(eventId);
+        tx.setHeldOut(false);
+        tx.setControlGroup(false);
+        transactionRepository.save(tx);
+    }
+
+    private void scenarioCheckout(String name, String email, BigDecimal amount,
+                                  CheckoutSession.AbandonmentReason reason, String eventId) {
+        CheckoutSession session = new CheckoutSession();
+        session.setCustomerId("SCN-" + eventId);
+        session.setCustomerName(name);
+        session.setCustomerEmail(email);
+        session.setCartAmount(amount);
+        session.setStartedAt(LocalDateTime.now().minusHours(6));
+        session.setAbandonedAt(LocalDateTime.now().minusHours(3));
+        session.setStatus(CheckoutStatus.ABANDONED);
+        session.setAbandonmentReason(reason);
+        session.setReminderCount(0);
+        session.setEventId(eventId);
+        session.setHeldOut(false);
+        session.setControlGroup(false);
+        checkoutSessionRepository.save(session);
+    }
+
+    private void scenarioReceivable(String business, String email, BigDecimal amount, int daysOverdue,
+                                    boolean brokenPromise, String eventId) {
+        Receivable receivable = new Receivable();
+        receivable.setBusinessCustomerId("SCN-" + eventId);
+        receivable.setBusinessName(business);
+        receivable.setContactEmail(email);
+        receivable.setInvoiceAmount(amount);
+        receivable.setInvoiceNumber("INV-DEMO-" + eventId);
+        receivable.setDueDate(LocalDate.now().minusDays(daysOverdue));
+        receivable.setDaysOverdue(daysOverdue);
+        receivable.setStatus(ReceivableStatus.OVERDUE);
+        receivable.setReminderCount(brokenPromise ? 1 : 0);
+        receivable.setEventId(eventId);
+        receivable.setHeldOut(false);
+        receivable.setControlGroup(false);
+        if (brokenPromise) {
+            receivable.setPromisedPaymentDate(LocalDate.now().minusDays(2));
+            receivable.setPromiseStatus(com.razorpay.recovery.receivable.Receivable.PromiseStatus.BROKEN);
+        }
+        receivableRepository.save(receivable);
+    }
+
+    /** Seed declared experimentation policies (the control split itself lives in the data). */
+    private void seedExperiments() {
+        if (experimentRepository.count() > 0) return;
+        LocalDate today = LocalDate.now();
+        experimentRepository.save(experiment("Payment Link vs Reminder (Payments)",
+                "Tests whether a direct pay-link out-earns a generic reminder on mid-value payment failures.",
+                15.0, "SEND_PAYMENT_LINK vs SEND_REMINDER", "PAYMENT", "STANDARD", today.minusDays(7), today.plusDays(23)));
+        experimentRepository.save(experiment("Discount Sensitivity (Checkout)",
+                "Measures incremental lift of a 10% offer on price-hesitant abandoned carts.",
+                20.0, "OFFER_DISCOUNT(10%) vs CHECKOUT_REMINDER", "CHECKOUT", "ALL", today.minusDays(3), today.plusDays(27)));
+        experimentRepository.save(experiment("Payment-Plan Adoption (Receivables)",
+                "Tests payment-plan offers against plain reminders for invoices overdue 15+ days.",
+                15.0, "OFFER_PAYMENT_PLAN vs SEND_REMINDER", "RECEIVABLE", "ALL", today.minusDays(10), today.plusDays(20)));
+        org.slf4j.LoggerFactory.getLogger(DataSeeder.class)
+                .info("DataSeeder: Declared 3 recovery experiments");
+    }
+
+    private com.razorpay.recovery.intelligence.RecoveryExperiment experiment(String name, String description,
+            double controlPct, String policy, String segment, String customerSegment,
+            LocalDate start, LocalDate end) {
+        com.razorpay.recovery.intelligence.RecoveryExperiment e = new com.razorpay.recovery.intelligence.RecoveryExperiment();
+        e.setName(name);
+        e.setDescription(description);
+        e.setControlPercentage(controlPct);
+        e.setTreatmentPolicy(policy);
+        e.setTargetSegment(segment);
+        e.setTargetCustomerSegment(customerSegment);
+        e.setStatus(com.razorpay.recovery.intelligence.RecoveryExperiment.Status.ACTIVE);
+        e.setStartDate(start);
+        e.setEndDate(end);
+        e.setCreatedAt(LocalDateTime.now());
+        return e;
     }
 
     /**

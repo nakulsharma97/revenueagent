@@ -2,6 +2,7 @@ package com.razorpay.recovery.recovery;
 
 import com.razorpay.recovery.audit.AuditService;
 import com.razorpay.recovery.config.BoundsConfig;
+import com.razorpay.recovery.intelligence.RecoveryIntelligenceService;
 import com.razorpay.recovery.customer.Customer;
 import com.razorpay.recovery.recovery.DecisionResult;
 import com.razorpay.recovery.recovery.EnforcedDecision;
@@ -63,6 +64,9 @@ class SignoffIntegrationTest {
     @Mock
     private AuditService auditService;
 
+    @Mock
+    private RecoveryIntelligenceService intelligenceService;
+
     private RecoveryOrchestratorService orchestrator;
 
     private static final Customer.CustomerSegment STD = Customer.CustomerSegment.STANDARD;
@@ -82,7 +86,7 @@ class SignoffIntegrationTest {
         orchestrator = new RecoveryOrchestratorService(
                 transactionRepository, checkoutSessionRepository, receivableRepository,
                 attemptRepository, decisionAgentService, paymentGateway, notificationService,
-                boundsConfig, rulesEngine, upliftService, auditService);
+                boundsConfig, rulesEngine, upliftService, auditService, intelligenceService);
 
         when(attemptRepository.saveAndFlush(any(RecoveryAttempt.class))).thenAnswer(inv -> inv.getArgument(0));
     }

@@ -2,6 +2,7 @@ package com.razorpay.recovery.recovery;
 import com.razorpay.recovery.transaction.Transaction;
 import com.razorpay.recovery.checkout.CheckoutSession;
 import com.razorpay.recovery.receivable.Receivable;
+import com.razorpay.recovery.intelligence.RecoveryState;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
@@ -88,6 +89,19 @@ public class RecoveryAttempt {
     /** Uplift segment classification: SURE_THING, LOST_CAUSE, PERSUADABLE, DO_NOT_DISTURB. */
     @Enumerated(EnumType.STRING)
     private UpliftSegment upliftSegment;
+
+    // ── Recovery Intelligence enrichment (set by RecoveryIntelligenceService) ──
+
+    /** Discount actually applied for OFFER_DISCOUNT decisions (null otherwise). */
+    private Integer discountPercent;
+
+    /** Detected customer recovery state (see intelligence.RecoveryState). */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 32)
+    private RecoveryState recoveryState;
+
+    /** Recovery-fatigue score at decision time (0 fresh → 1 severe). */
+    private double fatigueScore;
 
     /**
      * Structured multi-step trace showing exactly how the agent reached its decision.

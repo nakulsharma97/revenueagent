@@ -12,6 +12,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 import com.razorpay.recovery.config.BoundsConfig;
+import com.razorpay.recovery.intelligence.IntelligenceDecision;
+import com.razorpay.recovery.intelligence.NextBestActionEngine;
+import com.razorpay.recovery.intelligence.RecoveryCase;
 
 import java.util.List;
 import java.util.Map;
@@ -45,9 +48,17 @@ public class DecisionAgentService {
 
     private final BoundsConfig boundsConfig;
 
+    /**
+     * Structured Next-Best-Action engine — the decision-maker for the live pipeline.
+     * Deterministic and pure; constructed here (no Spring wiring needed) so the
+     * decision path is fully testable with a plain {@code new DecisionAgentService(...)}.
+     */
+    private final NextBestActionEngine engine;
+
     public DecisionAgentService(RulesEngine rulesEngine, BoundsConfig boundsConfig) {
         this.rulesEngine = rulesEngine;
         this.boundsConfig = boundsConfig;
+        this.engine = new NextBestActionEngine();
     }
 
     private boolean isHinglish() {
@@ -78,7 +89,7 @@ public class DecisionAgentService {
         if (!signoffFromEnforced && signoffFromRules && session.getReminderCount() >= 2) {
             signoffReason = "3rd reminder attempt — requires human review.";
         }
-        // Checkout proposals are heuristic-only today (no LLM prompt implemented) — never claim LLM usage.
+        // Legacy heuristic-only path — never claims LLM usage.
         boolean usedLlm = false;
         return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
     }
@@ -325,19 +336,26 @@ public class DecisionAgentService {
     public DecisionResult decideWithMeta(Transaction tx, com.razorpay.recovery.customer.Customer.CustomerSegment segment, DecisionTrace trace) {
         List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx, segment, trace);
 
-        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
-        LlmDecision proposed;
-        if (usedLlm) {
-            LlmDecision llmResult = callLlm(tx, eligible);
-            usedLlm = !llmResult.reasoning().startsWith("Rules-only mode:");
-            proposed = llmResult;
-            trace.add("PROPOSAL", (usedLlm ? "LLM" : "Heuristic fallback") + " proposed " + proposed.action()
-                    + " (confidence " + String.format("%.2f", proposed.confidence()) + "): " + proposed.reasoning());
-        } else {
-            proposed = heuristicFallback(tx, eligible);
-            trace.add("PROPOSAL", "Heuristic fallback proposed " + proposed.action()
-                    + " (confidence " + String.format("%.2f", proposed.confidence()) + "): " + proposed.reasoning());
-        }
+        // ── Structured Next-Best-Action decision (deterministic, always within bounds) ──
+        BoundsConfig.SegmentBounds bounds = boundsConfig.boundsFor(segment);
+        RecoveryCase case_ = RecoveryCase.fromPayment(tx, segment, eligible,
+                bounds.maxRetries(), bounds.maxDiscountPercent());
+        IntelligenceDecision id = engine.decide(case_, boundsConfig.getLanguage());
+        trace.add("INTELLIGENCE", "State " + id.recoveryState() + "; fatigue "
+                + String.format("%.0f", id.fatigueScore() * 100) + "% (" + id.fatigueBand() + ")");
+        trace.add("SIMULATION", "Counterfactually simulated " + id.alternatives().size()
+                + " candidate actions against a " + String.format("%.0f", id.baselineProbability() * 100)
+                + "% natural-recovery baseline");
+        LlmDecision proposed = toLlmDecision(id, eligible);
+        // The action ALWAYS comes from the structured engine; a live LLM may optionally
+        // enrich the reasoning as an explanation layer (never to choose the action).
+        ExplainOutcome ex = enrichWithLlmExplanation(proposed, id, trace);
+        boolean usedLlm = ex.used();
+        proposed = ex.decision();
+        trace.add("SELECTION", "Next-Best-Action = " + proposed.action()
+                + (proposed.discountPercent() != null ? " " + proposed.discountPercent() + "%" : "")
+                + " (expected net value " + (id.chosen() == null ? "n/a" : String.valueOf(id.chosen().incrementalNetValue()))
+                + ", confidence " + String.format("%.2f", proposed.confidence()) + ", policy " + id.automationPolicy() + ")");
 
         EnforcedDecision enforced = rulesEngine.enforceBounds(tx, segment, proposed, trace);
         // Compute the full signoff signal: enforceBounds flags discount caps;
@@ -363,9 +381,23 @@ public class DecisionAgentService {
 
     public DecisionResult decideWithMetaCheckout(CheckoutSession session, DecisionTrace trace) {
         List<RecoveryAction> eligible = rulesEngine.eligibleActions(session, trace);
-        LlmDecision proposed = proposeCheckout(session, eligible);
-        trace.add("PROPOSAL", "Heuristic proposed " + proposed.action()
-                + " (confidence " + String.format("%.2f", proposed.confidence()) + "): " + proposed.reasoning());
+
+        RecoveryCase case_ = RecoveryCase.fromCheckout(session, eligible,
+                boundsConfig.getMaxRetries(), boundsConfig.getMaxDiscountPercent());
+        IntelligenceDecision id = engine.decide(case_, boundsConfig.getLanguage());
+        trace.add("INTELLIGENCE", "State " + id.recoveryState() + "; fatigue "
+                + String.format("%.0f", id.fatigueScore() * 100) + "% (" + id.fatigueBand() + ")");
+        trace.add("SIMULATION", "Counterfactually simulated " + id.alternatives().size()
+                + " candidate actions against a " + String.format("%.0f", id.baselineProbability() * 100)
+                + "% natural-recovery baseline");
+        LlmDecision proposed = toLlmDecision(id, eligible);
+        ExplainOutcome ex = enrichWithLlmExplanation(proposed, id, trace);
+        boolean usedLlm = ex.used();
+        proposed = ex.decision();
+        trace.add("SELECTION", "Next-Best-Action = " + proposed.action()
+                + (proposed.discountPercent() != null ? " " + proposed.discountPercent() + "%" : "")
+                + " (confidence " + String.format("%.2f", proposed.confidence()) + ")");
+
         EnforcedDecision enforced = rulesEngine.enforceBounds(session, proposed, trace);
         boolean signoffFromEnforced = enforced.requiresHumanSignoff();
         boolean signoffFromRules = rulesEngine.requiresHumanSignoff(session, proposed);
@@ -378,16 +410,28 @@ public class DecisionAgentService {
         if (signoffFromEnforced) {
             trace.add("SIGNOFF", "Human sign-off required: " + signoffReason);
         }
-        // Checkout proposals are heuristic-only today (no LLM prompt implemented) — never claim LLM usage.
-        boolean usedLlm = false;
         return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
     }
 
     public DecisionResult decideWithMetaReceivable(Receivable receivable, DecisionTrace trace) {
         List<RecoveryAction> eligible = rulesEngine.eligibleActions(receivable, trace);
-        LlmDecision proposed = proposeReceivable(receivable, eligible);
-        trace.add("PROPOSAL", "Heuristic proposed " + proposed.action()
-                + " (confidence " + String.format("%.2f", proposed.confidence()) + "): " + proposed.reasoning());
+
+        RecoveryCase case_ = RecoveryCase.fromReceivable(receivable, eligible,
+                boundsConfig.getMaxRetries(), boundsConfig.getMaxDiscountPercent());
+        IntelligenceDecision id = engine.decide(case_, boundsConfig.getLanguage());
+        trace.add("INTELLIGENCE", "State " + id.recoveryState() + "; fatigue "
+                + String.format("%.0f", id.fatigueScore() * 100) + "% (" + id.fatigueBand() + ")");
+        trace.add("SIMULATION", "Counterfactually simulated " + id.alternatives().size()
+                + " candidate actions against a " + String.format("%.0f", id.baselineProbability() * 100)
+                + "% natural-recovery baseline");
+        LlmDecision proposed = toLlmDecision(id, eligible);
+        ExplainOutcome ex = enrichWithLlmExplanation(proposed, id, trace);
+        boolean usedLlm = ex.used();
+        proposed = ex.decision();
+        trace.add("SELECTION", "Next-Best-Action = " + proposed.action()
+                + (proposed.discountPercent() != null ? " " + proposed.discountPercent() + "%" : "")
+                + " (confidence " + String.format("%.2f", proposed.confidence()) + ")");
+
         EnforcedDecision enforced = rulesEngine.enforceBounds(receivable, proposed, trace);
         boolean signoffFromEnforced = enforced.requiresHumanSignoff();
         boolean signoffFromRules = rulesEngine.requiresHumanSignoff(receivable, proposed);
@@ -400,8 +444,95 @@ public class DecisionAgentService {
         if (signoffFromEnforced) {
             trace.add("SIGNOFF", "Human sign-off required: " + signoffReason);
         }
-        // Receivable proposals are heuristic-only today (no LLM prompt implemented) — never claim LLM usage.
-        boolean usedLlm = false;
         return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Intelligence-engine mapping + optional LLM explanation layer
+    // ═══════════════════════════════════════════════════════════════
+
+    /** Map the engine's structured decision onto the pipeline's LlmDecision contract. */
+    private LlmDecision toLlmDecision(IntelligenceDecision id, List<RecoveryAction> eligible) {
+        if (id.chosen() == null) {
+            RecoveryAction fallback = eligible.contains(RecoveryAction.ESCALATE_TO_HUMAN)
+                    ? RecoveryAction.ESCALATE_TO_HUMAN
+                    : RecoveryAction.ABANDON;
+            return new LlmDecision(fallback, id.reasoning(), 0.30, null, null);
+        }
+        var chosen = id.chosen();
+        return new LlmDecision(
+                chosen.action(),
+                id.reasoning() + " " + id.whyThisAction(),
+                id.confidence(),
+                chosen.action() == RecoveryAction.OFFER_DISCOUNT ? chosen.discountPercent() : null,
+                id.customerMessage()
+        );
+    }
+
+    /** Whether an actual LLM response is possible at all (used to decide honesty of the flag). */
+    private boolean llmConfigured() {
+        return llmEnabled && apiKey != null && !apiKey.isBlank();
+    }
+
+    private record ExplainOutcome(boolean used, LlmDecision decision) {}
+
+    /**
+     * Optional LLM <em>explanation</em> layer. The action was already chosen by the
+     * structured engine; when a real API key is configured the model is asked ONLY to
+     * articulate why that action beats the runner-up (never to pick). Returns
+     * {@code used=false} unless an actual API response was incorporated, so
+     * {@code llmDriven} is never faked.
+     */
+    private ExplainOutcome enrichWithLlmExplanation(LlmDecision proposed, IntelligenceDecision id, DecisionTrace trace) {
+        if (!llmConfigured() || id.chosen() == null || id.chosen().action() == RecoveryAction.ABANDON) {
+            return new ExplainOutcome(false, proposed);
+        }
+        try {
+            String runnerUp = null;
+            for (var a : id.alternatives()) {
+                if (a != id.chosen() && a.action() != id.chosen().action()) {
+                    runnerUp = a.displayName();
+                    break;
+                }
+            }
+            String prompt = """
+                    You are the explanation layer of a revenue-recovery decision engine. Do NOT choose an action.
+                    The structured engine already chose: %s (%s%% confidence).
+                    Runner-up candidate: %s.
+                    In at most 2 short sentences, explain to a risk officer why this action was chosen over the
+                    runner-up in terms of expected incremental net value, and name the single biggest risk.
+                    Return only the explanation text.
+                    """.formatted(
+                    proposed.action().name().replace('_', ' '),
+                    String.format("%.0f", proposed.confidence() * 100),
+                    runnerUp == null ? "none" : runnerUp);
+
+            Map<String, Object> body = Map.of(
+                    "model", model,
+                    "max_tokens", 200,
+                    "messages", List.of(Map.of("role", "user", "content", prompt))
+            );
+            JsonNode response = restClient.post()
+                    .uri("/v1/messages")
+                    .header("x-api-key", apiKey)
+                    .header("anthropic-version", "2023-06-01")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(JsonNode.class);
+            String text = response.get("content").get(0).get("text").asText().trim();
+            if (text.isEmpty()) {
+                return new ExplainOutcome(false, proposed);
+            }
+            String reasoning = proposed.reasoning() + "\n[LLM explanation] " + text;
+            LlmDecision enriched = new LlmDecision(proposed.action(), reasoning, proposed.confidence(),
+                    proposed.discountPercent(), proposed.customerMessage());
+            trace.add("LLM_EXPLANATION", "LLM explanation layer contributed a real response for " + proposed.action());
+            return new ExplainOutcome(true, enriched);
+        } catch (Exception e) {
+            trace.add("LLM_EXPLANATION", "LLM explanation unavailable (" + e.getClass().getSimpleName()
+                    + ") — reasoning stays engine-derived.");
+            return new ExplainOutcome(false, proposed);
+        }
     }
 }

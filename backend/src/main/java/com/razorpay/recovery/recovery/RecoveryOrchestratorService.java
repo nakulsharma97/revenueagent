@@ -7,6 +7,7 @@ import com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment;
 import com.razorpay.recovery.audit.AuditEvent;
 import com.razorpay.recovery.audit.AuditService;
 import com.razorpay.recovery.config.BoundsConfig;
+import com.razorpay.recovery.intelligence.RecoveryIntelligenceService;
 import com.razorpay.recovery.checkout.CheckoutSession;
 import com.razorpay.recovery.checkout.CheckoutSession.CheckoutStatus;
 import com.razorpay.recovery.customer.Customer;
@@ -61,6 +62,7 @@ public class RecoveryOrchestratorService {
     private final RulesEngine rulesEngine;
     private final UpliftSegmentationService upliftService;
     private final AuditService auditService;
+    private final RecoveryIntelligenceService intelligenceService;
 
     private int getCooldownMinutes() { return boundsConfig.getRetryCooldownMinutes(); }
     private int getMaxRetries() { return boundsConfig.getMaxRetries(); }
@@ -77,7 +79,8 @@ public class RecoveryOrchestratorService {
                                         BoundsConfig boundsConfig,
                                         RulesEngine rulesEngine,
                                         UpliftSegmentationService upliftService,
-                                        AuditService auditService) {
+                                        AuditService auditService,
+                                        RecoveryIntelligenceService intelligenceService) {
         this.transactionRepository = transactionRepository;
         this.checkoutSessionRepository = checkoutSessionRepository;
         this.receivableRepository = receivableRepository;
@@ -89,6 +92,7 @@ public class RecoveryOrchestratorService {
         this.rulesEngine = rulesEngine;
         this.upliftService = upliftService;
         this.auditService = auditService;
+        this.intelligenceService = intelligenceService;
     }
 
     /** True while a batch is executing — lets callers (e.g. the scheduler) skip gracefully. */
@@ -151,6 +155,7 @@ public class RecoveryOrchestratorService {
                 RecoveryAttempt attempt = processPaymentNoSave(tx, batchId, recoveredTxEvents);
                 transactionRepository.save(tx);
                 persistAndEmit(attempt, all, onAttempt);
+                intelligenceService.recordOutcome(attempt);
             }
 
             // ── Checkout abandonment ──
@@ -159,6 +164,7 @@ public class RecoveryOrchestratorService {
                 RecoveryAttempt attempt = processCheckoutNoSave(session, batchId, recoveredSessionEvents);
                 checkoutSessionRepository.save(session);
                 persistAndEmit(attempt, all, onAttempt);
+                intelligenceService.recordOutcome(attempt);
             }
 
             // ── B2B overdue receivables ──
@@ -167,6 +173,7 @@ public class RecoveryOrchestratorService {
                 RecoveryAttempt attempt = processReceivableNoSave(receivable, batchId, recoveredReceivableEvents);
                 receivableRepository.save(receivable);
                 persistAndEmit(attempt, all, onAttempt);
+                intelligenceService.recordOutcome(attempt);
             }
 
             long succeeded = all.stream().filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
@@ -262,6 +269,7 @@ public class RecoveryOrchestratorService {
         attempt.setSourceType(SourceType.PAYMENT);
         attempt.setTransaction(tx);
         attempt.setActionTaken(decision.action());
+        attempt.setDiscountPercent(decision.discountPercent());
         attempt.setReasoning(decision.reasoning());
         attempt.setConfidence(decision.confidence());
         attempt.setLlmDriven(result.llmDriven());
@@ -272,6 +280,10 @@ public class RecoveryOrchestratorService {
         attempt.setDecisionTrace(trace);
         attempt.setCustomerMessage(decision.customerMessage());
         attempt.setUpliftSegment(segment);
+
+        // Intelligence pass BEFORE execution mutates the entity: persists the counterfactual
+        // simulation, enriches the attempt with state/fatigue, flags anomalies, routes review.
+        intelligenceService.recordDecision(attempt, batchId);
 
         boolean success = executePayment(tx, decision, attempt);
         trace.add("EXECUTION", "MockPaymentGatewayService.attemptCharge(TX#" + tx.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
@@ -383,6 +395,7 @@ public class RecoveryOrchestratorService {
         attempt.setSourceType(SourceType.CHECKOUT);
         attempt.setCheckoutSession(session);
         attempt.setActionTaken(decision.action());
+        attempt.setDiscountPercent(decision.discountPercent());
         attempt.setReasoning(decision.reasoning());
         attempt.setConfidence(decision.confidence());
         attempt.setLlmDriven(result.llmDriven());
@@ -393,6 +406,9 @@ public class RecoveryOrchestratorService {
         attempt.setDecisionTrace(trace);
         attempt.setCustomerMessage(decision.customerMessage());
         attempt.setUpliftSegment(segment);
+
+        // Intelligence pass BEFORE execution mutates the session (see payment flow).
+        intelligenceService.recordDecision(attempt, batchId);
 
         boolean success = executeCheckout(session, decision, attempt);
         trace.add("EXECUTION", "MockNotificationService.execute(Checkout#" + session.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
@@ -494,6 +510,7 @@ public class RecoveryOrchestratorService {
         attempt.setSourceType(SourceType.RECEIVABLE);
         attempt.setReceivable(receivable);
         attempt.setActionTaken(decision.action());
+        attempt.setDiscountPercent(decision.discountPercent());
         attempt.setReasoning(decision.reasoning());
         attempt.setConfidence(decision.confidence());
         attempt.setLlmDriven(result.llmDriven());
@@ -504,6 +521,9 @@ public class RecoveryOrchestratorService {
         attempt.setDecisionTrace(trace);
         attempt.setCustomerMessage(decision.customerMessage());
         attempt.setUpliftSegment(segment);
+
+        // Intelligence pass BEFORE execution mutates the receivable (see payment flow).
+        intelligenceService.recordDecision(attempt, batchId);
 
         boolean success = executeReceivable(receivable, decision, attempt);
         trace.add("EXECUTION", "MockNotificationService.execute(Receivable#" + receivable.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());

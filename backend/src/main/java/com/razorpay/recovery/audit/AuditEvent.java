@@ -114,7 +114,13 @@ public class AuditEvent {
 
         // Demo mode
         SIMULATION_EVENT_INJECTED,
-        DUPLICATE_EVENT_DETECTED
+        DUPLICATE_EVENT_DETECTED,
+
+        // Recovery Intelligence
+        ANOMALY_DETECTED,
+        OUTCOME_RECORDED,
+        REVIEW_CASE_CREATED,
+        REVIEW_CASE_RESOLVED
     }
 
     /** Factory method for creating audit events */

@@ -7,7 +7,9 @@ import java.util.List;
 import java.util.Set;
 
 public interface RecoveryAttemptRepository extends JpaRepository<RecoveryAttempt, Long> {
-    List<RecoveryAttempt> findByTransactionId(Long transactionId);
+    List<RecoveryAttempt> findByTransactionIdOrderByExecutedAtAsc(Long transactionId);
+    List<RecoveryAttempt> findByCheckoutSessionIdOrderByExecutedAtAsc(Long checkoutSessionId);
+    List<RecoveryAttempt> findByReceivableIdOrderByExecutedAtAsc(Long receivableId);
     List<RecoveryAttempt> findByRequiresHumanSignoffTrue();
     List<RecoveryAttempt> findByRequiresHumanSignoffTrueAndSignoffStatus(RecoveryAttempt.SignoffStatus status);
     List<RecoveryAttempt> findByBatchId(String batchId);

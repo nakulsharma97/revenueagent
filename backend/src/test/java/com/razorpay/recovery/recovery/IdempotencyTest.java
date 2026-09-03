@@ -2,6 +2,7 @@ package com.razorpay.recovery.recovery;
 
 import com.razorpay.recovery.config.BoundsConfig;
 import com.razorpay.recovery.audit.AuditService;
+import com.razorpay.recovery.intelligence.RecoveryIntelligenceService;
 import com.razorpay.recovery.recovery.mocks.MockNotificationService;
 import com.razorpay.recovery.recovery.mocks.MockPaymentGatewayService;
 import com.razorpay.recovery.customer.Customer;
@@ -44,6 +45,7 @@ class IdempotencyTest {
     @Mock private MockNotificationService notificationService;
     @Mock private CustomerRepository customerRepository;
     @Mock private SubscriptionRepository subscriptionRepository;
+    @Mock private RecoveryIntelligenceService intelligenceService;
 
     private BoundsConfig boundsConfig;
     private RecoveryOrchestratorService orchestrator;
@@ -66,7 +68,7 @@ class IdempotencyTest {
         orchestrator = new RecoveryOrchestratorService(
                 transactionRepository, checkoutSessionRepository, receivableRepository,
                 attemptRepository, decisionAgentService, paymentGateway, notificationService,
-                boundsConfig, rulesEngine, upliftService, auditService
+                boundsConfig, rulesEngine, upliftService, auditService, intelligenceService
         );
     }
 

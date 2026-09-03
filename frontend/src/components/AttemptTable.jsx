@@ -89,7 +89,7 @@ function AttemptTableInner({ attempts, onSelectAttempt }) {
                     <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }} onClick={() => setOpenId(isOpen ? null : a.id)}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: ACTION_COLORS[a.actionTaken] || 'var(--text-muted)', flexShrink: 0 }} />
-                        <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-secondary)' }}>{a.actionTaken?.replaceAll('_', ' ')}</span>
+                        <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-secondary)' }}>{a.actionTaken?.replaceAll('_', ' ')}{a.discountPercent ? ` · ${a.discountPercent}%` : ''}</span>
                         {!a.customerNotified && a.actionTaken !== 'ESCALATE_TO_HUMAN' && a.actionTaken !== 'ABANDON' && (
                           <span style={{ padding: '1px 5px', borderRadius: 'var(--radius-full)', background: 'var(--surface-hover)', border: '1px solid var(--border)', fontSize: 9, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em' }}>SILENT</span>
                         )}
@@ -117,6 +117,12 @@ function AttemptTableInner({ attempts, onSelectAttempt }) {
                       <div style={{ marginTop: 8, padding: '12px 16px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
                         <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600, marginBottom: 4 }}>Agent Reasoning</div>
                         <div>{a.reasoning}</div>
+                        {(a.recoveryState || a.fatigueScore > 0) && (
+                          <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {a.recoveryState && <span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: 'var(--gold-bg)', color: 'var(--gold)', fontSize: 10, fontWeight: 700 }}>STATE · {a.recoveryState.replaceAll('_', ' ')}</span>}
+                            {a.fatigueScore > 0 && <span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: a.fatigueScore >= 0.6 ? 'var(--red-bg)' : 'var(--amber-bg)', color: a.fatigueScore >= 0.6 ? 'var(--red)' : 'var(--amber)', fontSize: 10, fontWeight: 700 }}>FATIGUE · {(a.fatigueScore * 100).toFixed(0)}%</span>}
+                          </div>
+                        )}
                         {a.requiresHumanSignoff && a.signoffReason && (
                           <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', color: 'var(--red)', fontSize: 12, fontWeight: 500 }}>⚠ Signoff Required: {a.signoffReason}</div>
                         )}

@@ -64,3 +64,69 @@ export async function fetchUplift() {
 export function exportCsv() {
   window.open(`${API_BASE}/api/recovery/export`, '_blank');
 }
+
+export async function fetchCommandCenter() {
+  const res = await fetch(`${API_BASE}/api/intelligence/command-center`);
+  if (!res.ok) throw new Error('command center fetch failed');
+  return res.json();
+}
+
+export async function simulateRecovery(payload) {
+  const res = await fetch(`${API_BASE}/api/intelligence/simulate`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`simulation failed (${res.status})`);
+  return res.json();
+}
+
+export async function fetchReviewQueue() {
+  const res = await fetch(`${API_BASE}/api/intelligence/review`);
+  if (!res.ok) throw new Error('review queue fetch failed');
+  return res.json();
+}
+
+export async function resolveReview(id, payload) {
+  const res = await fetch(`${API_BASE}/api/intelligence/review/${id}/resolve`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`review resolve failed (${res.status})`);
+  return res.json();
+}
+
+export async function fetchActionPerformance() {
+  const res = await fetch(`${API_BASE}/api/intelligence/action-performance`);
+  if (!res.ok) throw new Error('action performance fetch failed');
+  return res.json();
+}
+
+export async function fetchAnomalies(status) {
+  const res = await fetch(`${API_BASE}/api/intelligence/anomalies?status=${status || 'OPEN'}`);
+  if (!res.ok) throw new Error('anomalies fetch failed');
+  return res.json();
+}
+
+export async function fetchExperiments() {
+  const res = await fetch(`${API_BASE}/api/intelligence/experiments`);
+  if (!res.ok) throw new Error('experiments fetch failed');
+  return res.json();
+}
+
+export async function createExperiment(payload) {
+  const res = await fetch(`${API_BASE}/api/intelligence/experiments`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`create experiment failed (${res.status})`);
+  return res.json();
+}
+
+export async function fetchCounterfactuals(sourceType, id) {
+  const res = await fetch(`${API_BASE}/api/intelligence/counterfactuals?sourceType=${encodeURIComponent(sourceType || '')}&id=${id || ''}`);
+  if (!res.ok) throw new Error('counterfactuals fetch failed');
+  return res.json();
+}
+
+export async function fetchTimeline(sourceType, id) {
+  const res = await fetch(`${API_BASE}/api/intelligence/timeline?sourceType=${encodeURIComponent(sourceType || '')}&id=${id || ''}`);
+  if (!res.ok) throw new Error('timeline fetch failed');
+  return res.json();
+}

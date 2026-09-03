@@ -1,8 +1,8 @@
-# Revenue Recovery Agent
+# RecoveryOS — Autonomous Revenue Recovery Intelligence
 
-An AI agent that detects revenue at risk, determines the right intervention inside hard human-set bounds, executes it, and reports honest recovered-vs-cost metrics — for the Razorpay AI Buildathon.
+**RecoveryOS** (previously *Revenue Recovery Agent*) is an autonomous revenue-recovery intelligence system. It does not ask *"which failed payment should I retry?"* — it answers *"for this customer, at this moment, what is the NEXT BEST RECOVERY ACTION that creates the highest **incremental** net revenue?"* and proves the answer with counterfactual simulation.
 
-> Razorpay AI Buildathon · Track 03 — AI Revenue Recovery
+Built for the Razorpay AI Buildathon (Track 03).
 
 <!-- TODO: Record a 90-second screen capture, save as docs/demo.gif + docs/demo-thumbnail.png,
      then uncomment the line below. See docs/DEMO_SCRIPT.md for the walkthrough outline. -->
@@ -10,23 +10,43 @@ An AI agent that detects revenue at risk, determines the right intervention insi
 
 ## What this does
 
-The agent runs a **detect → diagnose → decide → execute → measure** loop across three revenue sources: **payment failures** (subscription dunning), **checkout abandonment** (cart recovery), and **B2B overdue receivables** (invoice recovery). On each item, `RulesEngine.eligibleActions()` computes the allow-list of bounded actions; the LLM (or a deterministic heuristic fallback if no API key is set) picks one action from that list and justifies the choice; `RulesEngine.enforceBounds()` re-validates the choice before anything executes. Every decision is logged with full reasoning, and a net-recovered-vs-baseline chart proves measured value on the same batch.
+The system runs a **detect → diagnose → simulate → select → execute → learn** loop across three revenue sources: **payment failures** (subscription dunning), **checkout abandonment** (cart recovery), and **B2B overdue receivables** (invoice recovery). For every eligible item the **Recovery Intelligence Engine** (package `com.razorpay.recovery.intelligence`) counterfactually simulates *every* bounded action — retry now / retry later / silent retry / payment link / 5–25% discount tiers / reminder / payment plan / escalation — scores each by expected **net** value (recovered − discount cost − intervention cost − risk penalty) over a natural-recovery baseline, and executes the winner. `RulesEngine` hard bounds and uplift/fatigue policies are enforced *before* anything runs; a live LLM (optional) only ever explains a structured decision, never chooses one. Every decision, outcome and review action is persisted for the Action Performance Lab and outcome learning.
 
 ## Architecture
 
 ```
-Detection → Diagnosis → Decision (RulesEngine bounds + LLM reasoning) → Execution (mocked) → Metrics
+Feature vector → Customer state + fatigue → Counterfactual simulation of every eligible action
+  → expected net value ranking → confidence band → automation policy → NEXT BEST ACTION
+  → bounded execution → outcome recorded → learning
 ```
 
 ```
-backend/   Spring Boot 3 (Java 21) — rules engine, decision agent, mock execution, metrics
-frontend/  React + Vite — live dashboard, 8-page SPA
+backend/   Spring Boot 3 (Java 21) — intelligence engine, rules engine, mock execution, metrics, audit
+frontend/  React + Vite — Command Center, Simulator, Human Review, Action Lab + live dashboards
 ```
+
+### The Recovery Intelligence layer (new)
+
+| Concept | Where | What it proves |
+|---|---|---|
+| Next-Best-Action engine | `intelligence/NextBestActionEngine.java` | simulates every eligible action and picks the highest **incremental net value** |
+| Multi-action uplift scoring | `intelligence/UpliftScoringService.java` | per-action success vs. natural baseline; discounts are not wasted on sure-things or transient failures |
+| Value optimizer | `intelligence/RecoveryValueOptimizer.java` | cost/discount/risk-aware selection, never success-rate-only |
+| Customer recovery state | `intelligence/CustomerStateService.java`, `RecoveryState.java` | NEW_FAILURE → REPEATED_FAILURE → RECOVERY_FATIGUE → STOP_INTERVENTION |
+| Recovery fatigue engine | `intelligence/RecoveryFatigueService.java` | suppresses contact as fatigue rises; severe fatigue stops automation |
+| Decision confidence | `intelligence/DecisionConfidenceService.java` | <60% → HUMAN_REVIEW, ≥85% → AUTO_EXECUTE |
+| Counterfactual decisions (persisted) | `intelligence/CounterfactualDecision.java` | every simulation row is stored; the selected row is flagged |
+| Outcome learning | `intelligence/RecoveryOutcome.java`, `OutcomeLearningService.java` | per-action success/net-value stats feed the Action Lab |
+| Human review queue | `intelligence/HumanReviewCase.java` | approve / override / reject with audit trail |
+| Anomaly detection | `intelligence/AnomalyDetectionService.java` | large failures, repeat failures, fatigue risk → HIGH/CRITICAL route to review |
+| Experimentation policy | `intelligence/RecoveryExperiment.java` | declared control/treatment policies, kept out of per-item decisions |
+| Recovery Timeline | `GET /api/intelligence/timeline` | every attempt on one entity, oldest → newest |
+
 
 | What it proves | File |
 |---|---|
-| Bounded workflow (hard limits enforced before any LLM output) | `backend/.../recovery/RulesEngine.java` |
-| Decision layer + LLM prompt + heuristic fallback | `backend/.../recovery/DecisionAgentService.java` |
+| Bounded workflow (hard limits enforced before any engine output) | `backend/.../recovery/RulesEngine.java` |
+| Decision layer: engine-driven action + optional LLM explanation | `backend/.../recovery/DecisionAgentService.java` |
 | End-to-end loop across all 3 revenue sources | `backend/.../recovery/RecoveryOrchestratorService.java` |
 | Honest metrics (recovered − intervention cost) | `backend/.../metrics/MetricsService.java` |
 | Realistic synthetic batch (320 items auto-seeded on startup) | `backend/.../config/DataSeeder.java` |
@@ -57,6 +77,38 @@ These are enforced in plain Java (`RulesEngine`), evaluated **before** any LLM o
 **Idempotency** is enforced at two layers: (1) a `UNIQUE` database constraint on each entity's `eventId` field, which physically rejects duplicates at the storage level, and (2) an application-level pre-check in `RecoveryOrchestratorService` that skips any entity with an existing `SUCCESS` recovery attempt, preventing double-charges and double-counted metrics.
 
 **Held-out split** uses a `boolean isHeldOut` field on every entity, populated by `DataSeeder` with a fixed random seed (~20% per source type, reproducible across runs). This field is never read by `DecisionAgentService` or `RulesEngine` — it is purely a post-hoc label used only by `MetricsService` when computing `?scope=held-out` metrics, making recovery-rate claims credible on unseen data.
+
+## Predictable demo scenarios
+
+`DataSeeder` additionally seeds ten **named** cases so a demo is predictable. Open the Decision Ledger and search by customer name:
+
+| Case | Seed | Expected next-best action |
+|---|---|---|
+| Riya Sharma (self-heal) | ₹9,999 · NETWORK_ERROR · reliability 0.88 | RETRY_SILENT — state LIKELY_TO_SELF_RECOVER, no customer contact |
+| Aarav Mehta (dead card) | ₹4,999 · CARD_EXPIRED · 1 retry | SEND_PAYMENT_LINK (discount simulated but rejected) |
+| Kabir Nair (retry window) | ₹2,000 · UPI_TIMEOUT · 1 retry | RETRY_NOW |
+| Meera Iyer (high value) | ₹15,999 · INSUFFICIENT_FUNDS · 2 retries · HIGH_VALUE | OFFER_DISCOUNT up to 20% (25% ceiling, > the 15% STANDARD cap) |
+| Dev Rao (final attempt) | ₹899 · UPI_PIN_MISMATCH · 2 retries | RETRY_SCHEDULED flagged for human sign-off |
+| Zoya Khan (big ticket) | ₹1,50,000 · CARD_STOLEN_FLAG | anomaly HIGH → review case |
+| Kavya Singh (price-hesitant cart) | ₹24,999 checkout · PRICE_HESITATION | OFFER_DISCOUNT (15%) |
+| Nikhil Verma (distracted cart) | ₹9,999 checkout · DISTRACTED | SEND_PAYMENT_LINK |
+| Metro Logistics | ₹2,50,000 invoice · 60 days overdue | OFFER_PAYMENT_PLAN |
+| GreenLeaf Foods | ₹85,000 invoice · broken promise, 10 days | PROMISE_FOLLOWUP |
+
+Expected *decisions* are deterministic (the engine uses no randomness); *outcomes* follow the mocked conversion model, so recovered totals vary per run while decisions do not.
+
+## New API surface
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/intelligence/simulate` | Recovery Simulator — returns state, fatigue, counterfactual ranking, chosen action |
+| `GET /api/intelligence/command-center` | Command Center aggregates |
+| `GET /api/intelligence/counterfactuals?sourceType=&id=` | persisted simulation rows for a case |
+| `GET /api/intelligence/timeline?sourceType=&id=` | recovery timeline of a case |
+| `GET /api/intelligence/review` · `POST /api/intelligence/review/{id}/resolve` | human review queue + approve/override/reject |
+| `GET /api/intelligence/anomalies` | anomaly feed |
+| `GET /api/intelligence/experiments` · `POST /api/intelligence/experiments` | experimentation policies |
+| `GET /api/intelligence/action-performance` | Action Performance Lab (ranked by net value) |
 
 ## Running it locally
 

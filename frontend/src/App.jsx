@@ -8,12 +8,18 @@ import AttemptTable from './components/AttemptTable';
 import TransactionModal from './components/TransactionModal';
 import PendingReview from './components/PendingReview';
 import LedgerTape from './components/LedgerTape';
-import { fetchDashboardSummary, fetchHeldOutMetrics, runBatch, runBatchStream, exportCsv, fetchUplift, fetchAttempts } from './api';
+import RecoverySimulator from './components/RecoverySimulator';
+import HumanReview from './components/HumanReview';
+import ActionLab from './components/ActionLab';
+import { fetchDashboardSummary, fetchHeldOutMetrics, runBatch, runBatchStream, exportCsv, fetchUplift, fetchAttempts, fetchCommandCenter } from './api';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 
 const NAV_ITEMS = [
-  { id: 'overview', label: 'Overview', icon: '⌂' },
+  { id: 'overview', label: 'Command Center', icon: '◈' },
+  { id: 'simulator', label: 'Recovery Simulator', icon: '🎯' },
+  { id: 'review', label: 'Human Review', icon: '👤' },
+  { id: 'lab', label: 'Action Lab', icon: '▦' },
   { id: 'bounds', label: 'Bound Register', icon: '⚙' },
   { id: 'transactions', label: 'Transactions', icon: '⇄' },
   { id: 'actions', label: 'Actions', icon: '⚡' },
@@ -107,6 +113,7 @@ export default function App() {
   const [simLoading, setSimLoading] = useState(false);
   const [heldOutMetrics, setHeldOutMetrics] = useState(null);
   const [upliftData, setUpliftData] = useState(null);
+  const [commandCenter, setCommandCenter] = useState(null);
 
   useEffect(() => { if (boundsConfig) setSettingsLocal(boundsConfig); }, [boundsConfig]);
 
@@ -121,9 +128,9 @@ export default function App() {
   /** Single round-trip: loads metrics + funnel + actions + efficiency. */
   const loadDashboard = useCallback(async () => {
     try {
-      const [d, h, u] = await Promise.all([fetchDashboardSummary(), fetchHeldOutMetrics(), fetchUplift().catch(() => null)]);
+      const [d, h, u, cc] = await Promise.all([fetchDashboardSummary(), fetchHeldOutMetrics(), fetchUplift().catch(() => null), fetchCommandCenter().catch(() => null)]);
       setMetrics(d.metrics); setFunnelData(d.funnel); setActionData(d.actions); setEfficiencyData(d.efficiency);
-      setHeldOutMetrics(h); setUpliftData(u);
+      setHeldOutMetrics(h); setUpliftData(u); setCommandCenter(cc);
       setLastUpdated(new Date()); setError(null); setRetryCount(0);
     } catch (e) {
       if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadDashboard(); }, 2000);
@@ -260,6 +267,27 @@ export default function App() {
   // ═══ 1. OVERVIEW ═══
   function renderOverview() {
     return (<>
+      {/* ROW 0: Recovery Intelligence strip */}
+      {commandCenter && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 16, padding: '12px 16px', background: 'var(--surface)', border: '1px solid var(--gold-border)', borderRadius: 'var(--radius-sm)' }}>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--gold)', marginBottom: 4 }}>Revenue at Risk</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 800, color: 'var(--text)' }}>{fmt(commandCenter.revenueAtRisk)}</div>
+          {[
+            ['AI DECISIONS TODAY', commandCenter.aiDecisionsToday, 'var(--gold)'],
+            ['HUMAN ESCALATIONS', commandCenter.pendingHumanEscalations, 'var(--red)'],
+            ['OPEN ANOMALIES', commandCenter.openAnomalies, 'var(--amber)'],
+            ['OUTCOMES RECORDED', commandCenter.outcomesRecorded, 'var(--green)'],
+            ['ACTIVE EXPERIMENTS', commandCenter.activeExperiments, 'var(--text-secondary)'],
+            ['FATIGUE ALERTS', commandCenter.fatigueAlerts, 'var(--amber)'],
+          ].map(([l, v, c]) => (
+            <div key={l}>
+              <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 4 }}>{l}</div>
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 700, color: c }}>{v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ROW 1: 4 stat cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 16 }}>
         <StatCard label="TRANSACTIONS AT RISK" value={metrics?.totalAtRisk ?? '—'} sub="Total flagged" icon="⚠" iconBg="rgba(216,155,50,0.12)" iconColor="var(--amber)" />
@@ -285,7 +313,7 @@ export default function App() {
 
       {/* ROW 4: Allowed Actions — full width */}
       <div className="card" style={{ marginBottom: 16, ...FW }}>
-        <div className="section-title">ALLOWED ACTIONS — LLM MAY ONLY PICK FROM THIS LIST</div>
+        <div className="section-title">ACTION SPACE — THE ENGINE MAY ONLY CHOOSE FROM THESE (HARD BOUNDS)</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
           {[ { action: 'Retry Now', desc: 'Immediate retry', icon: '↻', bg: 'var(--green-bg)' }, { action: 'Retry Scheduled', desc: 'After cooldown', icon: '⏱', bg: 'var(--gold-bg)' }, { action: 'Send Payment Link', desc: 'Update payment', icon: '🔗', bg: 'var(--amber-bg)' }, { action: 'Offer Discount', desc: 'Max 15%', icon: '%', bg: 'var(--gold-bg)' }, { action: 'Escalate to Human', desc: 'Collections team', icon: '👤', bg: 'var(--red-bg)' }, { action: 'Checkout Reminder', desc: 'Cart recovery', icon: '🛒', bg: 'var(--amber-bg)' }, { action: 'Send Reminder', desc: 'B2B invoice', icon: '📧', bg: 'var(--gold-bg)' }, { action: 'Offer Payment Plan', desc: 'Installments', icon: '📋', bg: 'var(--green-bg)' },
           ].map(a => (<div key={a.action} style={{ padding: '10px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface)' }}><div style={{ width: 30, height: 30, borderRadius: 'var(--radius-sm)', background: a.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>{a.icon}</div><div><div style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{a.action}</div><div style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: 'var(--text-muted)' }}>{a.desc}</div></div></div>))}
@@ -819,9 +847,25 @@ export default function App() {
     </>);
   }
 
+  // ═══ INTELLIGENCE PAGES ═══
+  function renderSimulator() {
+    return (<><PageHeader title="Recovery Simulator" subtitle="Hypothetical case → customer state → counterfactual simulation → next best action." /><RecoverySimulator /></>);
+  }
+
+  function renderReview() {
+    return (<><PageHeader title="Human Review Queue" subtitle="Low-confidence decisions, sign-off cases and HIGH/CRITICAL anomalies — approve, override or reject with an audit trail." /><HumanReview /></>);
+  }
+
+  function renderLab() {
+    return (<><PageHeader title="Action Performance Lab" subtitle="Which actions create net value? Ranked by outcomes recorded by the learning loop — never by success rate alone." /><ActionLab /></>);
+  }
+
   function renderSection() {
     switch (activeNav) {
       case 'overview': return renderOverview();
+      case 'simulator': return renderSimulator();
+      case 'review': return renderReview();
+      case 'lab': return renderLab();
       case 'bounds': return renderBoundRegister();
       case 'transactions': return renderTransactions();
       case 'actions': return renderActions();
@@ -839,8 +883,8 @@ export default function App() {
         <div style={{ padding: '24px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: 'var(--gold-bg)', border: '1px solid var(--gold-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--gold)', fontWeight: 700, fontSize: 16 }}>₹</div>
           <div>
-            <div style={{ fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 15, color: 'var(--text)', lineHeight: 1.2 }}>Recovery Ledger</div>
-            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--sidebar-text)' }}>Batch Operations</div>
+            <div style={{ fontFamily: 'var(--font-body)', fontWeight: 700, fontSize: 15, color: 'var(--text)', lineHeight: 1.2 }}>RecoveryOS</div>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--sidebar-text)' }}>Recovery Intelligence</div>
           </div>
         </div>
         <nav style={{ flex: 1, padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -869,8 +913,8 @@ export default function App() {
       <div style={{ width: 'calc(100vw - 240px)', marginLeft: 240, display: 'flex', flexDirection: 'column', minHeight: '100vh', minWidth: 0 }}>
         <header style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '18px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
           <div>
-            <h1 style={{ fontFamily: 'var(--font-body)', fontSize: 22, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>Revenue Recovery Agent</h1>
-            <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Razorpay AI Buildathon · Track 03 · AI Revenue Recovery</div>
+            <h1 style={{ fontFamily: 'var(--font-body)', fontSize: 22, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>RecoveryOS</h1>
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Autonomous Revenue Recovery Intelligence · Razorpay Build</div>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
             {reviewCount > 0 && <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, fontWeight: 600, color: 'var(--amber)', background: 'var(--amber-bg)', border: '1px solid var(--amber-border)', borderRadius: 'var(--radius-full)', padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 10 }}>⚠</span> {reviewCount} PENDING REVIEW</span>}
@@ -920,8 +964,8 @@ export default function App() {
         </main>
 
         <footer style={{ borderTop: '1px solid var(--border)', background: 'var(--surface)', padding: '12px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>RulesEngine.enforceBounds() — every action validated before execution</span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}><span style={{ color: 'var(--gold)' }}>●</span> LLM proposes · <span style={{ color: 'var(--red)' }}>●</span> Rules engine disposes</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>Next-Best-Action engine — highest expected incremental net value, bounded by policy</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}><span style={{ color: 'var(--gold)' }}>●</span> Engine simulates · <span style={{ color: 'var(--red)' }}>●</span> Bounds dispose · <span style={{ color: 'var(--green)' }}>●</span> Humans review</span>
         </footer>
       </div>
 

@@ -1,100 +1,60 @@
-# Demo Recording Script — 90 Seconds
+# DEMO SCRIPT — RecoveryOS
 
-Record this walkthrough in one continuous take. Use Loom (free), OBS, or your OS
-built-in screen recorder. Target resolution: 1920×1080 or 1280×720.
+A ~4-minute walkthrough for judges. Deterministic decisions, seeded data, H2 in-memory.
 
-Save the recording as `docs/demo.gif` and a still frame as `docs/demo-thumbnail.png`.
+**Setup**: `cd backend && mvn spring-boot:run`, then `cd frontend && npm install && npm run dev`. Open `http://localhost:5173`. The backend auto-seeds 320 items + 10 named demo cases and auto-runs the first batch, so the dashboard is already live.
 
----
-
-## Script
-
-### 0:00 – 0:15  —  The Problem (voice-over, no interaction needed)
-
-> "Every day, businesses lose revenue to payment failures, abandoned checkouts,
-> and overdue invoices. Today, teams chase these manually. Our agent automates
-> the full loop — detect, diagnose, decide, execute, and measure — while
-> staying inside hard, auditable limits."
-
-*(Screen: land on the Overview dashboard — stat cards and the agent-vs-baseline chart
-are visible immediately.)*
+> Metrics *numbers* vary a little between runs (outcome draws are seeded but random); **decisions are deterministic**. Quote decisions, not ₹ totals.
 
 ---
 
-### 0:15 – 0:35  —  The Bounds Register
+## 1. Command Center (0:00–0:30)
 
-Click **Bound Register** in the sidebar.
+- Headline stat band: **Revenue at Risk, AI Decisions Today, Human Escalations, Open Anomalies, Outcomes Recorded, Active Experiments, Fatigue Alerts**.
+- Say: *“Before any action runs, RecoveryOS prices every option as incremental net revenue — not just ‘will they pay’, but ‘would they have paid anyway’.”*
+- Point at the **LedgerTape** scrolling live decisions.
 
-> "This is what makes it an agent, not just an LLM with API access.
-> Max 3 retries. 60-minute cooldown. 15% discount ceiling. ₹500 minimum.
-> Above these limits, the system requires human sign-off.
-> These rules are enforced in plain Java before any LLM output runs."
+## 2. A single decision, deconstructed (0:30–1:20)
 
-*(Screen: hover over a couple of rows in the bounds table so the viewer reads them.)*
+In **Decision Ledger**, open the row for **Meera Iyer** (₹15,999, INSUFFICIENT_FUNDS, HIGH_VALUE, 2 retries). In the case file:
 
----
+1. **STATE chip** — `HIGH_VALUE_AT_RISK`; **FATIGUE chip**.
+2. **Counterfactual simulation** — show the ranked alternatives with net values: retry now ₹X, pay-link ₹Y, **5/10/15/20/25% discount tiers** — the 20–25% tiers exist only because the segment ceiling is 25% (a STANDARD customer would never see them). Selected row highlighted.
+3. **Decision trace** — DETECTION → INTELLIGENCE (state+fatigue) → SIMULATION (N candidates vs natural baseline) → SELECTION (next best action, confidence, policy) → EXECUTION → OUTCOME.
+4. **Recovery Timeline** below — every attempt on this case, oldest → newest.
 
-### 0:35 – 1:00  —  Run the Batch
+Then open **Aarav Mehta** (dead card, ₹4,999): the engine *simulated* a 10–15% discount and rejected it — the customer must replace their card, so the **pay-link** wins on incremental value. This is the “not success-rate-only” moment.
 
-Click **Overview** in the sidebar, then click the **Run Batch ▶** button.
+## 3. Recovery Simulator (1:20–2:00)
 
-> "320 at-risk items across payment failures, checkout abandonment, and B2B
-> receivables. Let's watch it process."
+Open **Recovery Simulator**. Run one case as **STANDARD**, then flip the same case to **HIGH_VALUE** and re-run:
+- same amount/cause → different discount ceiling; show the counterfactual bars change.
+Then a fatigue case (4 retries, low reliability): state → `STOP_INTERVENTION`/escaped to human review; confidence drops below 60% → policy **HUMAN_REVIEW**.
+Say: *“Every number here is a deterministic counterfactual — same input, same answer, on REST, SSE, startup and scheduler paths alike.”*
 
-*(Screen: ledger tape scrolls, stat cards update, charts repopulate.
-Wait for the batch to finish — usually 2-4 seconds.)*
+## 4. Human Review Queue (2:00–2:40)
 
-After it finishes, read the live numbers off the screen — recovery rate,
-revenue recovered, and the Agent vs. Baseline chart:
+Open **Human Review**. Cases present because: sign-off thresholds (final retry before the segment limit), low engine confidence, and HIGH anomalies (Zoya Khan ₹1,50,000). Resolve one live:
+- **Approve** the AI action — the linked attempt flips to APPROVED and the audit trail records `REVIEW_CASE_RESOLVED` (see Alerts/Audit API).
+- Explain the Open Anomalies table.
 
-> "Recovery rate [read the % off the stat card], net recovered
-> [read off the card] versus the naive baseline [read off the chart] —
-> that's the headline number."
+## 5. Action Lab + learning loop (2:40–3:20)
 
-> Note: the seeded dataset and mock outcomes are deterministic (fixed
-> Random seed 42), but the exact figures are computed live from the actual
-> batch, so always read them off the dashboard instead of scripting a
-> specific number.
+Open **Action Lab**: actions ranked by **net value** (recovered − intervention cost), with success rate as context — e.g. a cheap reminder or plan may outrank a margin-burning discount. Below it, the declared **Experiments** (pay-link vs reminder, discount sensitivity, payment-plan adoption) with their control percentages — and an inline “declare experiment” form.
 
----
+## 6. Why this is not a normal recovery system (3:20–4:00)
 
-### 1:00 – 1:20  —  Decision Trace
+Three one-liners while on Command Center:
 
-Click into any row in the **Decision Ledger** table at the bottom of the
-Overview page.
+1. **Counterfactuals, not retries.** Every decision stores the full set of actions it *didn't* take and why.
+2. **Incremental value, not probability.** The engine refuses to spend margin where the customer would pay anyway (discounts on transient network failures are priced near zero).
+3. **Bounded, explainable, human-safe.** Confidence floors, fatigue suppression, segment ceilings and review cases keep the machine inside policy — and the optional LLM only ever explains, never chooses.
 
-> "Every single decision is logged — what actions were eligible, which one
-> the agent chose, why, with what confidence, and whether it required
-> human sign-off."
-
-*(Screen: the transaction modal/case-file shows the reasoning text and
-the `llmDriven` / `requiresHumanSignoff` flags.)*
+Then answer the obvious question: *why did it do that?* → every decision carries the reasoning + top factors in plain English.
 
 ---
 
-### 1:20 – 1:30  —  The Headline Chart
+## Script notes for judges
 
-Scroll up to the **Net Recovered vs Baseline** chart.
-
-> "This chart answers the brief: measured money recovered, compared to doing
-> nothing smart. [Read the agent-vs-baseline delta off the chart] — on the
-> same batch, same probability model. That's the number that proves this works."
-
-*(Screen: end on this chart. Hold for 2-3 seconds, then stop recording.)*
-
----
-
-## Recording Tips
-
-- **No pauses** — keep it under 90 seconds with no dead air.
-- **Cursor visible** — move the mouse deliberately so viewers follow your clicks.
-- **No terminal** — judges don't need to see `mvn` or `npm`. Start with the
-  frontend already loaded in the browser.
-- **No API keys in frame** — if showing Settings, blur or crop the API key field.
-- **One take** — if you stumble, just re-record. 90 seconds is short enough
-  to nail on the second try.
-
-## Thumbnail
-
-Take a screenshot of the Overview page after running a batch (stat cards
-populated, chart visible). Crop to 1280×720 and save as `docs/demo-thumbnail.png`.
+- If a case you search isn't in the ledger, run a batch first (top-right **Run Batch ▶**) — it re-processes eligible items and refreshes everything, including the review queue.
+- Backend sanity endpoints: `GET /api/intelligence/command-center`, `GET /api/intelligence/review`, `GET /api/recovery/attempts`, `GET /api/audit/events` (audit trail).
