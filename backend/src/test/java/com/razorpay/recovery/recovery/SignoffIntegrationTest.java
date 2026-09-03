@@ -1,6 +1,8 @@
 package com.razorpay.recovery.recovery;
 
+import com.razorpay.recovery.audit.AuditService;
 import com.razorpay.recovery.config.BoundsConfig;
+import com.razorpay.recovery.customer.Customer;
 import com.razorpay.recovery.recovery.DecisionResult;
 import com.razorpay.recovery.recovery.EnforcedDecision;
 import com.razorpay.recovery.recovery.LlmDecision;
@@ -31,8 +33,8 @@ import static org.mockito.Mockito.*;
 
 /**
  * Integration-style tests for the orchestrator's signoff flagging logic.
- * Mocks DecisionAgentService (which now exposes decideWithMeta) and verifies
- * that RecoveryAttempt fields are set correctly.
+ * Mocks DecisionAgentService (which now exposes the segment-aware decideWithMeta)
+ * and verifies that RecoveryAttempt fields are set correctly.
  */
 @ExtendWith(MockitoExtension.class)
 class SignoffIntegrationTest {
@@ -58,10 +60,15 @@ class SignoffIntegrationTest {
     @Mock
     private MockNotificationService notificationService;
 
+    @Mock
+    private AuditService auditService;
+
     private RecoveryOrchestratorService orchestrator;
 
+    private static final Customer.CustomerSegment STD = Customer.CustomerSegment.STANDARD;
+
     @BeforeEach
-    void setUp() throws Exception {
+    void setUp() {
         BoundsConfig boundsConfig = new BoundsConfig();
         boundsConfig.setMaxRetries(3);
         boundsConfig.setMaxDiscountPercent(15);
@@ -75,25 +82,26 @@ class SignoffIntegrationTest {
         orchestrator = new RecoveryOrchestratorService(
                 transactionRepository, checkoutSessionRepository, receivableRepository,
                 attemptRepository, decisionAgentService, paymentGateway, notificationService,
-                boundsConfig, rulesEngine, upliftService);
+                boundsConfig, rulesEngine, upliftService, auditService);
 
-        when(attemptRepository.save(any(RecoveryAttempt.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(attemptRepository.saveAndFlush(any(RecoveryAttempt.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
     @Test
-    void thirdFailure_getsFlaggedForSignoff() throws Exception {
+    void thirdFailure_getsFlaggedForSignoff() {
         Transaction tx = buildTx(FailureReason.INSUFFICIENT_FUNDS, 2, new BigDecimal("1000"));
         tx.setStatus(TransactionStatus.IN_RECOVERY);
 
         when(transactionRepository.findByStatusIn(any())).thenReturn(List.of(tx));
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         DecisionResult mockResult = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "Retry one more time", 0.6, null)),
                 false,
                 true,
                 "3rd consecutive failure — requires human review before final disposition.");
-        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(mockResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), eq(STD), any(DecisionTrace.class))).thenReturn(mockResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(false);
 
         List<RecoveryAttempt> results = orchestrator.runBatch();
@@ -106,17 +114,18 @@ class SignoffIntegrationTest {
     }
 
     @Test
-    void firstFailure_doesNotGetFlagged() throws Exception {
+    void firstFailure_doesNotGetFlagged() {
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
         tx.setStatus(TransactionStatus.AT_RISK);
 
         when(transactionRepository.findByStatusIn(any())).thenReturn(List.of(tx));
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         DecisionResult mockResult = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "First failure, retry", 0.6, null)),
                 false);
-        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(mockResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), eq(STD), any(DecisionTrace.class))).thenReturn(mockResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(true);
 
         List<RecoveryAttempt> results = orchestrator.runBatch();
@@ -127,17 +136,18 @@ class SignoffIntegrationTest {
     }
 
     @Test
-    void secondFailure_doesNotGetFlagged() throws Exception {
+    void secondFailure_doesNotGetFlagged() {
         Transaction tx = buildTx(FailureReason.BANK_SERVER_DOWN, 1, new BigDecimal("1000"));
         tx.setStatus(TransactionStatus.IN_RECOVERY);
 
         when(transactionRepository.findByStatusIn(any())).thenReturn(List.of(tx));
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         DecisionResult mockResult = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_SCHEDULED, "Schedule retry", 0.55, null)),
                 false);
-        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(mockResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), eq(STD), any(DecisionTrace.class))).thenReturn(mockResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(false);
 
         List<RecoveryAttempt> results = orchestrator.runBatch();
@@ -148,12 +158,15 @@ class SignoffIntegrationTest {
     }
 
     @Test
-    void discountCap_getsFlaggedForSignoff() throws Exception {
-        Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 0, new BigDecimal("2499"));
-        tx.setStatus(TransactionStatus.AT_RISK);
+    void discountCap_getsFlaggedForSignoff() {
+        // OFFER_DISCOUNT must be RulesEngine-eligible for the mocked decision to execute:
+        // a customer-facing attempt has already happened (retryCount=1, IN_RECOVERY).
+        Transaction tx = buildTx(FailureReason.CARD_EXPIRED, 1, new BigDecimal("2499"));
+        tx.setStatus(TransactionStatus.IN_RECOVERY);
 
         when(transactionRepository.findByStatusIn(any())).thenReturn(List.of(tx));
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         EnforcedDecision capped = new EnforcedDecision(
                 new LlmDecision(RecoveryAction.OFFER_DISCOUNT, "Discount [capped by RulesEngine to policy max]", 0.7, 15),
@@ -161,7 +174,7 @@ class SignoffIntegrationTest {
                 "LLM proposed 20% discount, capped to policy max 15%"
         );
         DecisionResult mockResult = new DecisionResult(capped, true);
-        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(mockResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), eq(STD), any(DecisionTrace.class))).thenReturn(mockResult);
         when(notificationService.sendDiscountOffer(tx, 15)).thenReturn(true);
         when(notificationService.costOf(true)).thenReturn(new BigDecimal("0.35"));
 
@@ -174,22 +187,24 @@ class SignoffIntegrationTest {
     }
 
     @Test
-    void batchId_isSetOnAllAttempts() throws Exception {
+    void batchId_isSetOnAllAttempts() {
         Transaction tx1 = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
         tx1.setStatus(TransactionStatus.AT_RISK);
-        Transaction tx2 = buildTx(FailureReason.CARD_EXPIRED, 0, new BigDecimal("2000"));
-        tx2.setStatus(TransactionStatus.AT_RISK);
+        Transaction tx2 = buildTx(FailureReason.NETWORK_ERROR, 1, new BigDecimal("2000"));
+        tx2.setStatus(TransactionStatus.IN_RECOVERY);
 
         when(transactionRepository.findByStatusIn(any())).thenReturn(List.of(tx1, tx2));
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(decisionAgentService.segmentOf(tx1)).thenReturn(STD);
+        when(decisionAgentService.segmentOf(tx2)).thenReturn(STD);
 
         DecisionResult result1 = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "Retry", 0.6, null)), false);
         DecisionResult result2 = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.SEND_PAYMENT_LINK, "Send link", 0.5, null)), false);
 
-        when(decisionAgentService.decideWithMeta(eq(tx1), any(DecisionTrace.class))).thenReturn(result1);
-        when(decisionAgentService.decideWithMeta(eq(tx2), any(DecisionTrace.class))).thenReturn(result2);
+        when(decisionAgentService.decideWithMeta(eq(tx1), eq(STD), any(DecisionTrace.class))).thenReturn(result1);
+        when(decisionAgentService.decideWithMeta(eq(tx2), eq(STD), any(DecisionTrace.class))).thenReturn(result2);
         when(paymentGateway.attemptCharge(tx1)).thenReturn(true);
         when(notificationService.sendPaymentLink(tx2)).thenReturn(true);
         when(notificationService.costOf(true)).thenReturn(new BigDecimal("0.05"));
@@ -204,7 +219,7 @@ class SignoffIntegrationTest {
     }
 
     @Test
-    void cooldownSkip_persistsAndHasBatchId() throws Exception {
+    void cooldownSkip_recordsSkippedOutcomeNotPending() {
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 1, new BigDecimal("1000"));
         tx.setStatus(TransactionStatus.IN_RECOVERY);
         tx.setLastAttemptAt(LocalDateTime.now().minusMinutes(10));
@@ -214,24 +229,31 @@ class SignoffIntegrationTest {
         List<RecoveryAttempt> results = orchestrator.runBatch();
 
         assertEquals(1, results.size());
-        assertEquals(RecoveryAttempt.AttemptOutcome.PENDING, results.get(0).getOutcome());
-        assertNotNull(results.get(0).getBatchId(),
+        RecoveryAttempt skip = results.get(0);
+        assertEquals(RecoveryAttempt.AttemptOutcome.SKIPPED, skip.getOutcome(),
+                "A cooldown skip must be recorded as SKIPPED, not PENDING");
+        assertEquals(RecoveryAction.NO_ACTION, skip.getActionTaken(),
+                "A cooldown skip must NOT be recorded as a scheduled retry");
+        assertTrue(skip.getReasoning().startsWith("COOLDOWN"),
+                "Skip reasoning must explain why it was skipped, got: " + skip.getReasoning());
+        assertNotNull(skip.getBatchId(),
                 "Skipped attempts should also have a batchId");
-        verify(attemptRepository, atLeastOnce()).save(any(RecoveryAttempt.class));
+        verify(attemptRepository, atLeastOnce()).saveAndFlush(any(RecoveryAttempt.class));
     }
 
     @Test
-    void llmDriven_flag_isPropagatedToAttempt() throws Exception {
+    void llmDriven_flag_isPropagatedToAttempt() {
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
         tx.setStatus(TransactionStatus.AT_RISK);
 
         when(transactionRepository.findByStatusIn(any())).thenReturn(List.of(tx));
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         DecisionResult llmResult = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "LLM decision", 0.85, null)),
                 true);
-        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(llmResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), eq(STD), any(DecisionTrace.class))).thenReturn(llmResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(true);
 
         List<RecoveryAttempt> results = orchestrator.runBatch();
@@ -242,17 +264,18 @@ class SignoffIntegrationTest {
     }
 
     @Test
-    void heuristicDriven_flag_isPropagatedToAttempt() throws Exception {
+    void heuristicDriven_flag_isPropagatedToAttempt() {
         Transaction tx = buildTx(FailureReason.NETWORK_ERROR, 0, new BigDecimal("1000"));
         tx.setStatus(TransactionStatus.AT_RISK);
 
         when(transactionRepository.findByStatusIn(any())).thenReturn(List.of(tx));
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(decisionAgentService.segmentOf(tx)).thenReturn(STD);
 
         DecisionResult heuristicResult = new DecisionResult(
                 EnforcedDecision.ok(new LlmDecision(RecoveryAction.RETRY_NOW, "Rules-only mode: first failure", 0.6, null)),
                 false);
-        when(decisionAgentService.decideWithMeta(eq(tx), any(DecisionTrace.class))).thenReturn(heuristicResult);
+        when(decisionAgentService.decideWithMeta(eq(tx), eq(STD), any(DecisionTrace.class))).thenReturn(heuristicResult);
         when(paymentGateway.attemptCharge(tx)).thenReturn(true);
 
         List<RecoveryAttempt> results = orchestrator.runBatch();
@@ -271,11 +294,5 @@ class SignoffIntegrationTest {
         tx.setAmount(amount);
         tx.setStatus(TransactionStatus.AT_RISK);
         return tx;
-    }
-
-    private static void setField(Object target, String fieldName, Object value) throws Exception {
-        java.lang.reflect.Field field = target.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
-        field.set(target, value);
     }
 }

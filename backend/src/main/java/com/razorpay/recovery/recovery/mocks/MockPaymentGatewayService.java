@@ -16,7 +16,8 @@ import java.util.Random;
 @Service
 public class MockPaymentGatewayService {
 
-    private final Random random = new Random();
+    /** Fixed seed → identical outcomes on every run for a given input, so demo metrics are reproducible. */
+    private final Random random = new Random(42);
 
     public boolean attemptCharge(Transaction tx) {
         // Success probability per failure reason, calibrated to Indian payment retry data:

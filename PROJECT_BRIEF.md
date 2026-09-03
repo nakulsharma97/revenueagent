@@ -23,7 +23,7 @@ Of the six example directions (checkout drop-off, failed-subscription recovery, 
 **Primary: Failed-subscription payment recovery (dunning management).**
 Rationale: it has a clean, closed-loop, measurable unit (one failed transaction → one resolved outcome), realistic synthetic data is easy to generate credibly, and it maps directly onto the requester's existing Spring Boot + MySQL skill set — no unfamiliar ML training pipeline required to hit the bar.
 
-Checkout-abandonment recovery is architecturally identical (same detect → diagnose → decide → execute → measure loop) and is left as a same-pattern extension, not built by default, to keep the submission focused rather than shallow.
+Checkout-abandonment recovery and B2B overdue-receivable recovery are architecturally identical (same detect → diagnose → decide → execute → measure loop), and the shipped implementation builds all three source types on that one shared loop — `RecoveryOrchestratorService.runBatchWithCallback()` is the single processing core used by the REST batch, the SSE stream, the startup auto-run, and the scheduler, so every source gets identical bounded-workflow handling. Receivables additionally carry promise-to-pay tracking; all three feed the uplift control/treatment analysis.
 
 ## 3. Non-negotiable constraints ("bounded workflow")
 
@@ -31,11 +31,11 @@ The agent must never act outside these, regardless of what the LLM proposes:
 
 | Rule | Limit |
 |---|---|
-| Max retry attempts per transaction | 3 |
+| Max retry attempts per transaction | 3 (STANDARD) · 5 (HIGH_VALUE) |
 | Cooldown between retries | 60 minutes |
-| Max discount the agent can offer | 15% |
+| Max discount the agent can offer | 15% (STANDARD) · 25% (HIGH_VALUE) |
 | Minimum transaction amount eligible for a discount | ₹500 |
-| Actions requiring human sign-off | Anything above the discount ceiling, or a 3rd consecutive failure |
+| Actions requiring human sign-off | Anything above the discount ceiling, or the last retry before the segment's limit |
 
 These are enforced in plain Java (`RulesEngine`), evaluated **before** any LLM output is allowed to execute. The LLM proposes; the rules engine disposes.
 
@@ -78,7 +78,7 @@ A judge scoring "strictly defense-only, bounded workflow" is explicitly checking
 
 ## 6. Data model
 
-`customers → subscriptions → transactions → recovery_attempts`, plus a derived `metrics_ledger` view. Full schema and entities are in `backend/src/main/java/.../model/`.
+`customers → subscriptions → transactions → recovery_attempts`, plus `checkout_sessions`, `receivables`, and an immutable `audit_events` trail. Full schema and entities live in `backend/src/main/java/com/razorpay/recovery/` (per-aggregate packages: `transaction/`, `checkout/`, `receivable/`, `customer/`, `subscription/`, `recovery/`, `audit/`). API responses use DTOs mapped inside service-layer transactions (`api/RecoveryApiService`), so `spring.jpa.open-in-view=false` is safe and no `LazyInitializationException` can reach the wire.
 
 ## 7. What "measured" means here — the metrics that must appear in the demo
 
@@ -100,7 +100,7 @@ A judge scoring "strictly defense-only, bounded workflow" is explicitly checking
 
 ## 9. Demo script (for the judging bar)
 
-1. Show the dashboard with 300 seeded at-risk transactions — stat cards show the batch size, recovery rate, and net revenue.
-2. Click **Run recovery batch** — watch the ledger tape populate, stat cards update, and the decision table fill with the agent's per-transaction reasoning.
-3. Click any row in the decision table to expand the agent's one-line reasoning for that transaction — e.g. "Rules-only mode: first failure on a retryable decline code — retry immediately."
-4. End on the net-recovered-vs-baseline chart — the headline number: ₹4,11,075 net recovered by the agent vs ₹3,02,365 naive baseline, same batch.
+1. Show the dashboard with 320 auto-seeded at-risk items (200 payment failures + 80 abandoned checkouts + 40 overdue receivables) — stat cards show the batch size, recovery rate, and net revenue. A recovery batch has already auto-run on startup.
+2. Click **Run Batch** — the scrolling ledger tape populates, stat cards update, and the Decision Ledger fills with the agent's per-transaction reasoning.
+3. Click any row in the Decision Ledger to expand the agent's reasoning and the full decision trace (eligibility → proposal → bounds check → execution), including whether the decision was LLM-driven or the rules-only fallback.
+4. End on the net-recovered-vs-baseline chart — the headline number. Read it off the screen: the seeded dataset and mock outcomes are deterministic (fixed Random seed 42), but figures are computed live from the actual batch, so every dashboard number is internally consistent by construction.

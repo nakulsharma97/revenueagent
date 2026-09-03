@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import BoundsRegister from './components/BoundsRegister';
 import StatCard from './components/StatCard';
 import RecoveryChart from './components/RecoveryChart';
@@ -7,7 +7,8 @@ import ActionBreakdownChart from './components/ActionBreakdownChart';
 import AttemptTable from './components/AttemptTable';
 import TransactionModal from './components/TransactionModal';
 import PendingReview from './components/PendingReview';
-import { fetchMetrics, fetchDashboardSummary, fetchHeldOutMetrics, runBatch, runBatchStream, exportCsv, fetchUplift } from './api';
+import LedgerTape from './components/LedgerTape';
+import { fetchDashboardSummary, fetchHeldOutMetrics, runBatch, runBatchStream, exportCsv, fetchUplift, fetchAttempts } from './api';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 
@@ -23,8 +24,6 @@ const NAV_ITEMS = [
 ];
 
 const FW = { width: '100%', minWidth: 0 };
-const GAP = { gap: 16 };
-const GAP_LG = { gap: 20 };
 
 /* Reusable page header */
 function PageHeader({ title, subtitle, right }) {
@@ -93,6 +92,9 @@ export default function App() {
   const [retryCount, setRetryCount] = useState(0);
   const [actionLog, setActionLog] = useState([]);
   const [allTransactions, setAllTransactions] = useState([]);
+  const [txLoadError, setTxLoadError] = useState(null);
+  const [rcvLoadError, setRcvLoadError] = useState(null);
+  const [attemptsLoadError, setAttemptsLoadError] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [boundsConfig, setBoundsConfig] = useState(null);
   const [settingsLocal, setSettingsLocal] = useState({});
@@ -116,11 +118,6 @@ export default function App() {
     } finally { setSettingsSaving(false); }
   }
 
-  const loadMetrics = useCallback(async () => {
-    try { const m = await fetchMetrics(); setMetrics(m); setLastUpdated(new Date()); setError(null); setRetryCount(0); }
-    catch (e) { if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadMetrics(); }, 2000); else setError('Cannot reach the recovery engine on :8080 — make sure the Spring Boot backend is running, then refresh.'); }
-  }, [retryCount]);
-
   /** Single round-trip: loads metrics + funnel + actions + efficiency. */
   const loadDashboard = useCallback(async () => {
     try {
@@ -139,14 +136,40 @@ export default function App() {
   }, []);
 
   const loadActionLog = useCallback(async () => {
-    try { const res = await fetch(`${API_BASE}/api/recovery/transactions`); if (res.ok) setAllTransactions(await res.json()); } catch (e) {}
+    try {
+      const res = await fetch(`${API_BASE}/api/recovery/transactions`);
+      if (!res.ok) throw new Error(`transactions request failed (${res.status})`);
+      setAllTransactions(await res.json());
+      setTxLoadError(null);
+    } catch (e) {
+      setTxLoadError('Could not load transactions — the recovery engine may be unreachable or returned an error.');
+    }
+  }, []);
+
+  const loadAttempts = useCallback(async () => {
+    try {
+      const data = await fetchAttempts();
+      setAttempts(data);
+      setAttemptsLoadError(null);
+    } catch (e) {
+      setAttemptsLoadError('Could not load recovery attempts — the recovery engine may be unreachable.');
+    }
   }, []);
 
   const loadBoundsConfig = useCallback(async () => {
     try { const res = await fetch(`${API_BASE}/api/config/bounds`); if (res.ok) setBoundsConfig(await res.json()); } catch (e) {}
   }, []);
 
-  const loadReceivables = useCallback(async () => { try { const res = await fetch(`${API_BASE}/api/recovery/receivables`); if (res.ok) setAllReceivables(await res.json()); } catch (e) {} }, []);
+  const loadReceivables = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/recovery/receivables`);
+      if (!res.ok) throw new Error(`receivables request failed (${res.status})`);
+      setAllReceivables(await res.json());
+      setRcvLoadError(null);
+    } catch (e) {
+      setRcvLoadError('Could not load receivables — the recovery engine may be unreachable or returned an error.');
+    }
+  }, []);
 
   async function simulateBounds() {
     setSimLoading(true);
@@ -164,8 +187,8 @@ export default function App() {
     finally { setSimLoading(false); }
   }
 
-  useEffect(() => { loadDashboard(); loadReviewCount(); loadActionLog(); loadBoundsConfig(); loadReceivables(); }, []);
-  useEffect(() => { if (funnelRefresh > 0) { loadDashboard(); loadReviewCount(); loadActionLog(); } }, [funnelRefresh]);
+  useEffect(() => { loadDashboard(); loadReviewCount(); loadActionLog(); loadAttempts(); loadBoundsConfig(); loadReceivables(); }, []);
+  useEffect(() => { if (funnelRefresh > 0) { loadDashboard(); loadReviewCount(); loadActionLog(); loadAttempts(); } }, [funnelRefresh]);
 
   async function handleRunBatch() {
     setLoading(true); setAttempts([]); setStreamCount(null);
@@ -189,10 +212,10 @@ export default function App() {
               recoveredAmount: finalRecovered.value,
             } : null);
           },
-          // onDone: called when all attempts are processed
-          (count) => {
-            if (count === -1) reject(new Error('SSE connection failed'));
-            else resolve(count);
+          // onDone: called when all attempts are processed — carries {processed, skipped, failed}
+          (counts) => {
+            if (!counts || counts.processed === -1) reject(new Error('SSE connection failed'));
+            else resolve(counts);
           },
           // onTotal: called first with the total eligible item count
           (total) => {
@@ -202,8 +225,8 @@ export default function App() {
         // Store EventSource ref for potential cleanup
         window.__batchES = es;
       });
-      // All data already streamed — just refresh dashboard metrics
-      await Promise.all([loadDashboard(), loadReviewCount(), loadActionLog()]);
+      // All data already streamed — refresh dashboard metrics and persisted attempts
+      await Promise.all([loadDashboard(), loadReviewCount(), loadActionLog(), loadAttempts()]);
       setError(null);
     } catch (e) {
       if (e.message?.includes('409') || e.message?.includes('already running')) {
@@ -216,7 +239,7 @@ export default function App() {
           setAttempts(reversed); setStreamCount(result.length); setActionLog(result);
           const finalRecovered = reversed.filter(a => a.outcome === 'SUCCESS').reduce((sum, a) => sum + (a.amountRecovered || 0), 0);
           setBatchProgress(prev => prev ? { ...prev, processed: result.length, recoveredAmount: finalRecovered } : null);
-          await Promise.all([loadDashboard(), loadReviewCount(), loadActionLog()]);
+          await Promise.all([loadDashboard(), loadReviewCount(), loadActionLog(), loadAttempts()]);
           setError(null);
         } catch (fallbackErr) {
           setError(fallbackErr.message?.includes('409') ? 'Batch already running — wait for the current batch to complete.' : 'Batch run failed — check the backend logs.');
@@ -244,6 +267,9 @@ export default function App() {
         <StatCard label="RECOVERY RATE" value={metrics ? pct(metrics.recoveryRatePercent) : '—'} sub="Recovery success rate" icon="▮" iconBg="var(--gold-bg)" iconColor="var(--gold)" />
         <StatCard label="NET REVENUE" value={metrics ? fmt(metrics.netRecovered) : '—'} sub={metrics ? `${fmt(metrics.revenueRecovered)} recovered · ${fmt(metrics.interventionCost)} cost` : ''} icon="₹" iconBg="var(--gold-bg)" iconColor="var(--gold-bright)" valueColor="var(--gold-bright)" />
       </div>
+
+      {/* Ledger tape — live feed of decisions as batches stream in */}
+      <div style={{ marginBottom: 16, ...FW }}><LedgerTape attempts={attempts} /></div>
 
       {/* ROW 2: Net Revenue chart + Bounds Register */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 14, marginBottom: 16, alignItems: 'start' }}>
@@ -305,7 +331,14 @@ export default function App() {
     const lost = allTransactions.filter(t => t.status === 'LOST').length;
     return (<>
       <PageHeader title="Transactions" subtitle="Monitor all transactions at risk and their recovery progress." />
-      {txCount === 0 ? (
+      {txLoadError ? (
+        <div className="card" style={{ ...FW, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 40px' }}>
+          <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.2 }}>⚠</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 16, fontWeight: 600, color: 'var(--red)', marginBottom: 8 }}>Failed to load transactions</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 440, lineHeight: 1.6 }}>{txLoadError} Make sure the Spring Boot backend is running on :8080, then refresh.</div>
+          <button onClick={() => { setTxLoadError(null); loadActionLog(); }} style={{ marginTop: 18, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '9px 22px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>Retry</button>
+        </div>
+      ) : txCount === 0 ? (
         <EmptyState icon="⇄" title="No transactions loaded" description="Run a recovery batch to populate the transaction ledger with payment failures, checkout abandonments, and receivables." action="Run Batch ▶" onAction={handleRunBatch} />
       ) : (<>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 16 }}>
@@ -341,6 +374,11 @@ export default function App() {
       </>)})
 
       {/* Receivables section with promise-to-pay status */}
+      {rcvLoadError && (
+        <div className="card" style={{ ...FW, marginTop: 16, padding: '16px 20px' }}>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--amber)', fontWeight: 600 }}>⚠ {rcvLoadError}</div>
+        </div>
+      )}
       {allReceivables.length > 0 && (<>
         <div style={{ marginTop: 24, marginBottom: 12 }}>
           <h3 style={{ fontFamily: 'var(--font-body)', fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>Overdue Receivables</h3>
@@ -385,14 +423,22 @@ export default function App() {
 
   // ═══ 4. ACTIONS ═══
   function renderActions() {
-    const sorted = [...(actionLog.length > 0 ? actionLog : attempts)].sort((a, b) => b.id - a.id);
+    const sorted = [...(actionLog.length > 0 ? actionLog : attempts)].sort((a, b) => (b.id || 0) - (a.id || 0));
     const successCount = sorted.filter(a => a.outcome === 'SUCCESS').length;
     const failCount = sorted.filter(a => a.outcome === 'FAILED').length;
+    const skippedCount = sorted.filter(a => a.outcome === 'SKIPPED').length;
     const totalCost = sorted.reduce((s, a) => s + (a.interventionCost || 0), 0);
     const totalRecovered = sorted.filter(a => a.outcome === 'SUCCESS').reduce((s, a) => s + (a.amountRecovered || 0), 0);
     return (<>
       <PageHeader title="Actions" subtitle="Every intervention executed by the recovery agent across all sources." right={sorted.length > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>{sorted.length} total actions</span>} />
-      {sorted.length === 0 ? (
+      {attemptsLoadError && sorted.length === 0 ? (
+        <div className="card" style={{ ...FW, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 40px' }}>
+          <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.2 }}>⚠</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 16, fontWeight: 600, color: 'var(--red)', marginBottom: 8 }}>Failed to load actions</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 440, lineHeight: 1.6 }}>{attemptsLoadError} Make sure the Spring Boot backend is running on :8080, then refresh.</div>
+          <button onClick={loadAttempts} style={{ marginTop: 18, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '9px 22px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>Retry</button>
+        </div>
+      ) : sorted.length === 0 ? (
         <EmptyState icon="⚡" title="No actions executed yet" description="Run a recovery batch to see agent decisions, actions taken, outcomes, and recovery details across payment failures, checkout abandonments, and receivables." action="Run Batch ▶" onAction={handleRunBatch} />
       ) : (<>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 16 }}>
@@ -415,7 +461,7 @@ export default function App() {
                   <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--gold)', fontWeight: 600 }}>#{a.transaction?.id || a.checkoutSession?.id || a.receivable?.id}</td>
                   <td><span style={{ padding: '2px 8px', borderRadius: 'var(--radius-full)', background: a.sourceType === 'PAYMENT' ? 'var(--gold-bg)' : a.sourceType === 'CHECKOUT' ? 'var(--amber-bg)' : 'var(--green-bg)', color: a.sourceType === 'PAYMENT' ? 'var(--gold)' : a.sourceType === 'CHECKOUT' ? 'var(--amber)' : 'var(--green)', fontWeight: 600, fontSize: 10, whiteSpace: 'nowrap' }}>{a.sourceType}</span></td>
                   <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{a.actionTaken?.replaceAll('_', ' ')}</td>
-                  <td><span style={{ padding: '3px 10px', borderRadius: 'var(--radius-full)', background: a.outcome === 'SUCCESS' ? 'var(--green-bg)' : a.outcome === 'FAILED' ? 'var(--red-bg)' : 'var(--amber-bg)', color: a.outcome === 'SUCCESS' ? 'var(--green)' : a.outcome === 'FAILED' ? 'var(--red)' : 'var(--amber)', fontWeight: 600, fontSize: 11 }}>{a.outcome}</span></td>
+                  <td><span style={{ padding: '3px 10px', borderRadius: 'var(--radius-full)', background: a.outcome === 'SUCCESS' ? 'var(--green-bg)' : a.outcome === 'FAILED' ? 'var(--red-bg)' : a.outcome === 'SKIPPED' ? 'var(--surface-hover)' : 'var(--amber-bg)', color: a.outcome === 'SUCCESS' ? 'var(--green)' : a.outcome === 'FAILED' ? 'var(--red)' : a.outcome === 'SKIPPED' ? 'var(--text-muted)' : 'var(--amber)', fontWeight: 600, fontSize: 11 }}>{a.outcome === 'SKIPPED' ? 'SKIPPED' : a.outcome}</span></td>
                   <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: a.amountRecovered > 0 ? 'var(--green)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.amountRecovered > 0 ? fmt(a.amountRecovered) : '—'}</td>
                   <td style={{ fontFamily: 'var(--font-mono)', textAlign: 'right', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{a.interventionCost > 0 ? fmt(a.interventionCost) : '—'}</td>
                   <td style={{ color: 'var(--text-muted)', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.reasoning}</td>
@@ -445,7 +491,14 @@ export default function App() {
           >↓ Export CSV</button>
         </div>}
       />
-      {attempts.length === 0 ? (
+      {attemptsLoadError && attempts.length === 0 ? (
+        <div className="card" style={{ ...FW, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 40px' }}>
+          <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.2 }}>⚠</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 16, fontWeight: 600, color: 'var(--red)', marginBottom: 8 }}>Failed to load the decision ledger</div>
+          <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 440, lineHeight: 1.6 }}>{attemptsLoadError} Make sure the Spring Boot backend is running on :8080, then refresh.</div>
+          <button onClick={loadAttempts} style={{ marginTop: 18, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '9px 22px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>Retry</button>
+        </div>
+      ) : attempts.length === 0 ? (
         <EmptyState icon="☰" title="No decisions recorded yet" description="The Decision Ledger populates after the Recovery Agent processes a batch. Each row shows the AI recommendation, which bounded action the RulesEngine approved, and the outcome." action="Run Batch ▶" onAction={handleRunBatch} />
       ) : (<>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 16, marginBottom: 16 }}>

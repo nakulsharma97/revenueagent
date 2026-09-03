@@ -1,6 +1,6 @@
 const RULES = [
   { id: 'R1', rule: 'Max retries per transaction', limit: '3', code: 'RulesEngine.eligibleActions(tx)' },
-  { id: 'R2', rule: 'Cooldown between retries', limit: '60 min', code: 'RecoveryOrchestratorService.processOne()' },
+  { id: 'R2', rule: 'Cooldown between retries', limit: '60 min', code: 'RecoveryOrchestratorService (cooldown guard)' },
   { id: 'R3', rule: 'Max agent discount', limit: '15%', code: 'RulesEngine.enforceBounds()' },
   { id: 'R4', rule: 'Min amount for discount', limit: '₹500', code: 'RulesEngine.eligibleActions()' },
   { id: 'R5', rule: 'Sign-off: discount > ceiling', limit: 'REQUIRED', code: 'RulesEngine.requiresHumanSignoff()' },

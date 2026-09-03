@@ -337,10 +337,11 @@ public class MetricsService {
                 + allReceivables.stream().filter(r -> r.getStatus() == ReceivableStatus.WRITTEN_OFF).count();
 
         long pendingAttempts = attempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.PENDING).count();
+        long skippedAttempts = attempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.SKIPPED).count();
         long succeededAttempts = attempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
         long failedAttempts = attempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.FAILED).count();
 
-        return new FunnelData(atRisk, inRecovery, recovered, lost, pendingAttempts, succeededAttempts, failedAttempts);
+        return new FunnelData(atRisk, inRecovery, recovered, lost, pendingAttempts, skippedAttempts, succeededAttempts, failedAttempts);
     }
 
     public List<Map<String, Object>> batchHistory() {
@@ -359,7 +360,7 @@ public class MetricsService {
             long total = batchAttempts.size();
             long succeeded = batchAttempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
             long failed = batchAttempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.FAILED).count();
-            long skipped = batchAttempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.PENDING).count();
+            long skipped = batchAttempts.stream().filter(a -> a.getOutcome() == AttemptOutcome.SKIPPED).count();
             BigDecimal recovered = batchAttempts.stream()
                     .filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS)
                     .map(RecoveryAttempt::getAmountRecovered)
@@ -486,6 +487,7 @@ public class MetricsService {
      * - If action would NOT be eligible under new bounds: excluded entirely
      *   (the agent would have chosen something else, so we don't count this recovery)
      */
+    @Transactional(readOnly = true)
     public SimulationResult simulate(int maxRetries, int maxDiscountPercent,
                                       BigDecimal minAmountForDiscount, int retryCooldownMinutes) {
         List<RecoveryAttempt> attempts = attemptRepository.findAll();
@@ -497,8 +499,8 @@ public class MetricsService {
         long simAttempts = 0;
 
         for (RecoveryAttempt a : attempts) {
-            // Cooldown skips are always the same regardless of bounds
-            if (a.getOutcome() == AttemptOutcome.PENDING) {
+            // Skipped/legacy-pending attempts are bounds-independent — always include them
+            if (a.getOutcome() == AttemptOutcome.SKIPPED || a.getOutcome() == AttemptOutcome.PENDING) {
                 simAttempts++;
                 continue;
             }

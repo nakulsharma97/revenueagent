@@ -78,7 +78,8 @@ public class DecisionAgentService {
         if (!signoffFromEnforced && signoffFromRules && session.getReminderCount() >= 2) {
             signoffReason = "3rd reminder attempt — requires human review.";
         }
-        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
+        // Checkout proposals are heuristic-only today (no LLM prompt implemented) — never claim LLM usage.
+        boolean usedLlm = false;
         return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
     }
 
@@ -95,7 +96,8 @@ public class DecisionAgentService {
         if (!signoffFromEnforced && signoffFromRules && receivable.getReminderCount() >= 2) {
             signoffReason = "3rd reminder on overdue receivable — requires human review.";
         }
-        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
+        // Receivable proposals are heuristic-only today (no LLM prompt implemented) — never claim LLM usage.
+        boolean usedLlm = false;
         return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
     }
 
@@ -105,30 +107,16 @@ public class DecisionAgentService {
      * Orchestrator uses this; existing tests keep using decide().
      */
     public DecisionResult decideWithMeta(Transaction tx) {
-        List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx);
+        return decideWithMeta(tx, segmentOf(tx), new DecisionTrace());
+    }
 
-        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
-        LlmDecision proposed;
-        if (usedLlm) {
-            LlmDecision llmResult = callLlm(tx, eligible);
-            usedLlm = !llmResult.reasoning().startsWith("Rules-only mode:");
-            proposed = llmResult;
-        } else {
-            proposed = heuristicFallback(tx, eligible);
+    /** Extract the customer segment for a transaction (STANDARD when unknown). */
+    public com.razorpay.recovery.customer.Customer.CustomerSegment segmentOf(Transaction tx) {
+        if (tx.getSubscription() != null && tx.getSubscription().getCustomer() != null
+                && tx.getSubscription().getCustomer().getCustomerSegment() != null) {
+            return tx.getSubscription().getCustomer().getCustomerSegment();
         }
-
-        EnforcedDecision enforced = rulesEngine.enforceBounds(tx, proposed);
-        // Compute the full signoff signal: enforceBounds flags discount caps;
-        // RulesEngine.requiresHumanSignoff() also checks 3rd consecutive failure.
-        boolean signoffFromEnforced = enforced.requiresHumanSignoff();
-        boolean signoffFromRules = rulesEngine.requiresHumanSignoff(tx, proposed);
-        boolean signoffRequired = signoffFromEnforced || signoffFromRules;
-        String signoffReason = signoffFromEnforced ? enforced.signoffReason() : null;
-        if (!signoffFromEnforced && signoffFromRules && tx.getRetryCount() >= 2) {
-            signoffReason = "3rd consecutive failure — requires human review before final disposition.";
-        }
-
-        return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
+        return com.razorpay.recovery.customer.Customer.CustomerSegment.STANDARD;
     }
 
     private LlmDecision callLlm(Transaction tx, List<RecoveryAction> eligible) {
@@ -326,7 +314,16 @@ public class DecisionAgentService {
     // ═══════════════════════════════════════════════════════════════
 
     public DecisionResult decideWithMeta(Transaction tx, DecisionTrace trace) {
-        List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx, trace);
+        return decideWithMeta(tx, segmentOf(tx), trace);
+    }
+
+    /**
+     * Segment-aware entry point — the recovery pipeline's canonical payment decision path.
+     * Uses the customer segment's bounds (HIGH_VALUE gets wider retry/discount limits)
+     * throughout eligibility, enforcement, and sign-off computation.
+     */
+    public DecisionResult decideWithMeta(Transaction tx, com.razorpay.recovery.customer.Customer.CustomerSegment segment, DecisionTrace trace) {
+        List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx, segment, trace);
 
         boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
         LlmDecision proposed;
@@ -342,20 +339,26 @@ public class DecisionAgentService {
                     + " (confidence " + String.format("%.2f", proposed.confidence()) + "): " + proposed.reasoning());
         }
 
-        EnforcedDecision enforced = rulesEngine.enforceBounds(tx, proposed, trace);
+        EnforcedDecision enforced = rulesEngine.enforceBounds(tx, segment, proposed, trace);
+        // Compute the full signoff signal: enforceBounds flags discount caps;
+        // RulesEngine.requiresHumanSignoff() also checks the last retry before the segment's limit.
         boolean signoffFromEnforced = enforced.requiresHumanSignoff();
-        boolean signoffFromRules = rulesEngine.requiresHumanSignoff(tx, proposed);
+        boolean signoffFromRules = rulesEngine.requiresHumanSignoff(tx, segment, proposed);
         boolean signoffRequired = signoffFromEnforced || signoffFromRules;
         String signoffReason = signoffFromEnforced ? enforced.signoffReason() : null;
-        if (!signoffFromEnforced && signoffFromRules && tx.getRetryCount() >= 2) {
-            signoffReason = "3rd consecutive failure — requires human review before final disposition.";
-            trace.add("SIGNOFF", "3rd consecutive failure detected (retryCount=" + tx.getRetryCount() + ") — human sign-off required.");
+        if (!signoffFromEnforced && signoffFromRules && tx.getRetryCount() >= segmentBoundsRetryFloor(segment) - 1) {
+            signoffReason = "Last retry before the segment's retry limit — requires human review before final disposition.";
+            trace.add("SIGNOFF", "Retry count " + tx.getRetryCount() + " at the segment's sign-off threshold (" + segment + ") — human sign-off required.");
         }
         if (signoffFromEnforced) {
             trace.add("SIGNOFF", "Human sign-off required: " + signoffReason);
         }
 
         return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
+    }
+
+    private int segmentBoundsRetryFloor(com.razorpay.recovery.customer.Customer.CustomerSegment segment) {
+        return boundsConfig.boundsFor(segment).maxRetries();
     }
 
     public DecisionResult decideWithMetaCheckout(CheckoutSession session, DecisionTrace trace) {
@@ -375,7 +378,8 @@ public class DecisionAgentService {
         if (signoffFromEnforced) {
             trace.add("SIGNOFF", "Human sign-off required: " + signoffReason);
         }
-        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
+        // Checkout proposals are heuristic-only today (no LLM prompt implemented) — never claim LLM usage.
+        boolean usedLlm = false;
         return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
     }
 
@@ -396,7 +400,8 @@ public class DecisionAgentService {
         if (signoffFromEnforced) {
             trace.add("SIGNOFF", "Human sign-off required: " + signoffReason);
         }
-        boolean usedLlm = llmEnabled && apiKey != null && !apiKey.isBlank();
+        // Receivable proposals are heuristic-only today (no LLM prompt implemented) — never claim LLM usage.
+        boolean usedLlm = false;
         return new DecisionResult(enforced, usedLlm, signoffRequired, signoffReason);
     }
 }

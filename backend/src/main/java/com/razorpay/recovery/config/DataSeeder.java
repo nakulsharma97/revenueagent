@@ -11,6 +11,7 @@ import com.razorpay.recovery.checkout.CheckoutSession.AbandonmentReason;
 import com.razorpay.recovery.receivable.Receivable.ReceivableStatus;
 import com.razorpay.recovery.checkout.CheckoutSession.CheckoutStatus;
 import com.razorpay.recovery.transaction.Transaction.TransactionStatus;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
@@ -31,6 +32,10 @@ public class DataSeeder implements CommandLineRunner {
     private final ReceivableRepository receivableRepository;
     private final RecoveryOrchestratorService orchestrator;
     private final Random random = new Random(42);
+
+    /** Set false in tests (src/test/resources/application.properties) so each test controls its own data. */
+    @Value("${recovery.seed-data:true}")
+    private boolean seedData = true;
 
     // Subscription tiers mirror typical Indian SaaS pricing (annual INR, monthly billing).
     // ₹299 Starter is deliberately below the ₹500 min-discount threshold to test
@@ -97,6 +102,12 @@ public class DataSeeder implements CommandLineRunner {
     @Override
     @Transactional
     public void run(String... args) {
+        if (!seedData) {
+            org.slf4j.LoggerFactory.getLogger(DataSeeder.class)
+                    .info("DataSeeder: seed-data=false — skipping demo data (test mode)");
+            return;
+        }
+
         // 1. Seed 200 payment failure transactions
         seedPaymentFailures(200);
 

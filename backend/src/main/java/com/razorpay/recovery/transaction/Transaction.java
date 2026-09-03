@@ -11,7 +11,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "transactions")
+@Table(name = "transactions", indexes = @Index(name = "idx_transaction_razorpay_id", columnList = "razorpay_payment_id"))
 @Getter
 @Setter
 @NoArgsConstructor

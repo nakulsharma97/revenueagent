@@ -7,33 +7,9 @@ export async function fetchDashboardSummary() {
   return res.json();
 }
 
-export async function fetchMetrics() {
-  const res = await fetch(`${API_BASE}/api/metrics`);
-  if (!res.ok) throw new Error('Failed to fetch recovery metrics');
-  return res.json();
-}
-
 export async function fetchHeldOutMetrics() {
   const res = await fetch(`${API_BASE}/api/metrics?scope=held-out`);
   if (!res.ok) throw new Error('Failed to fetch held-out evaluation metrics');
-  return res.json();
-}
-
-export async function fetchFunnel() {
-  const res = await fetch(`${API_BASE}/api/metrics/funnel`);
-  if (!res.ok) throw new Error('funnel fetch failed');
-  return res.json();
-}
-
-export async function fetchActionBreakdown() {
-  const res = await fetch(`${API_BASE}/api/metrics/actions`);
-  if (!res.ok) throw new Error('action breakdown fetch failed');
-  return res.json();
-}
-
-export async function fetchTransactions() {
-  const res = await fetch(`${API_BASE}/api/recovery/transactions`);
-  if (!res.ok) throw new Error('transactions fetch failed');
   return res.json();
 }
 
@@ -46,7 +22,10 @@ export async function runBatch() {
   return res.json();
 }
 
-/** Streaming batch: yields total count first, then each attempt as it completes via SSE. */
+/**
+ * Streaming batch: yields total count first, then each attempt as it completes via SSE.
+ * The final 'done' event carries { processed, skipped, failed } counts.
+ */
 export function runBatchStream(onAttempt, onDone, onTotal) {
   const es = new EventSource(`${API_BASE}/api/recovery/run-batch/stream`);
   es.addEventListener('total', (e) => {
@@ -56,19 +35,23 @@ export function runBatchStream(onAttempt, onDone, onTotal) {
     onAttempt(JSON.parse(e.data));
   });
   es.addEventListener('done', (e) => {
-    onDone(parseInt(e.data));
+    // Newer backends send JSON counts; older numeric payloads are treated as processed-only.
+    let counts = { processed: -1, skipped: 0, failed: 0 };
+    try { counts = JSON.parse(e.data); } catch (_) { counts = { processed: parseInt(e.data), skipped: 0, failed: 0 }; }
+    onDone(counts);
     es.close();
   });
   es.onerror = () => {
     es.close();
-    onDone(-1);
+    onDone({ processed: -1, skipped: 0, failed: 0 });
   };
   return es;
 }
 
-export async function fetchPendingReview() {
-  const res = await fetch(`${API_BASE}/api/recovery/pending-review`);
-  if (!res.ok) throw new Error('pending-review fetch failed');
+/** Persisted recovery attempts, newest first — survives page refresh. */
+export async function fetchAttempts() {
+  const res = await fetch(`${API_BASE}/api/recovery/attempts`);
+  if (!res.ok) throw new Error('Failed to fetch persisted recovery attempts');
   return res.json();
 }
 

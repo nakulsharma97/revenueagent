@@ -151,6 +151,38 @@ public class RulesEngine {
     }
 
     /**
+     * Segment-aware enforcement: caps discounts against the bounds for the given
+     * customer segment (HIGH_VALUE gets a wider ceiling), not the global default.
+     */
+    public EnforcedDecision enforceBounds(Transaction tx, Customer.CustomerSegment segment, LlmDecision proposed) {
+        Set<RecoveryAction> allowed = Set.copyOf(eligibleActions(tx, segment));
+
+        if (proposed == null || !allowed.contains(proposed.action())) {
+            return EnforcedDecision.ok(safestFallback(allowed));
+        }
+
+        if (proposed.action() == RecoveryAction.OFFER_DISCOUNT) {
+            int cap = getBoundsFor(segment).maxDiscountPercent();
+            int pct = proposed.discountPercent() == null ? 0 : proposed.discountPercent();
+            if (pct > cap || pct <= 0) {
+                LlmDecision capped = new LlmDecision(
+                        RecoveryAction.OFFER_DISCOUNT,
+                        proposed.reasoning() + " [capped by RulesEngine to policy max]",
+                        proposed.confidence(),
+                        cap
+                );
+                return new EnforcedDecision(
+                        capped,
+                        true,
+                        "LLM proposed " + pct + "% discount, capped to policy max " + cap + "%"
+                );
+            }
+        }
+
+        return EnforcedDecision.ok(proposed);
+    }
+
+    /**
      * Additive method — determines whether a proposed decision requires human sign-off,
      * per PROJECT_BRIEF.md section 3: "anything above the discount ceiling, or a 3rd consecutive failure."
      * This is the single most gradeable proof that the system is bounded.
@@ -165,6 +197,23 @@ public class RulesEngine {
         }
         // Condition B: 3rd consecutive failure (retryCount >= maxRetries - 1)
         if (tx.getRetryCount() >= getMaxRetries() - 1) {
+            return true;
+        }
+        return false;
+    }
+
+    /** Segment-aware variant — sign-off thresholds follow the segment's bounds. */
+    public boolean requiresHumanSignoff(Transaction tx, Customer.CustomerSegment segment, LlmDecision proposed) {
+        BoundsConfig.SegmentBounds bounds = getBoundsFor(segment);
+        // Condition A: proposed discount exceeds the segment's ceiling
+        if (proposed != null && proposed.action() == RecoveryAction.OFFER_DISCOUNT) {
+            int pct = proposed.discountPercent() == null ? 0 : proposed.discountPercent();
+            if (pct > bounds.maxDiscountPercent()) {
+                return true;
+            }
+        }
+        // Condition B: last retry before the segment's retry limit ("3rd consecutive failure" rule)
+        if (tx.getRetryCount() >= bounds.maxRetries() - 1) {
             return true;
         }
         return false;
@@ -328,14 +377,36 @@ public class RulesEngine {
         return eligible;
     }
 
+    /** Segment-aware trace variant of {@link #eligibleActions(Transaction, Customer.CustomerSegment)}. */
+    public List<RecoveryAction> eligibleActions(Transaction tx, Customer.CustomerSegment segment, DecisionTrace trace) {
+        List<RecoveryAction> eligible = eligibleActions(tx, segment);
+        trace.add("ELIGIBILITY", "RulesEngine.eligibleActions() returned " + eligible + " for TX#" + tx.getId()
+                + " (segment=" + segment + ", retryCount=" + tx.getRetryCount() + ", failureReason=" + tx.getFailureReason() + ", amount=" + tx.getAmount() + ")");
+        return eligible;
+    }
+
     public EnforcedDecision enforceBounds(Transaction tx, LlmDecision proposed, DecisionTrace trace) {
         EnforcedDecision enforced = enforceBounds(tx, proposed);
         if (enforced.requiresHumanSignoff()) {
             trace.add("BOUNDS_CHECK", "RulesEngine flagged human sign-off required: " + enforced.signoffReason());
-        } else if (enforced != EnforcedDecision.ok(proposed) && proposed != null && !Set.copyOf(eligibleActions(tx)).contains(proposed.action())) {
+        } else if (proposed != null && !Set.copyOf(eligibleActions(tx)).contains(proposed.action())) {
             trace.add("BOUNDS_CHECK", "Proposed action " + proposed.action() + " was NOT in eligible set — corrected to " + enforced.decision().action());
         } else {
             trace.add("BOUNDS_CHECK", "Proposed action " + proposed.action() + " is within eligible set — no correction needed");
+        }
+        return enforced;
+    }
+
+    /** Segment-aware trace variant of {@link #enforceBounds(Transaction, Customer.CustomerSegment, LlmDecision)}. */
+    public EnforcedDecision enforceBounds(Transaction tx, Customer.CustomerSegment segment, LlmDecision proposed, DecisionTrace trace) {
+        EnforcedDecision enforced = enforceBounds(tx, segment, proposed);
+        Set<RecoveryAction> allowed = Set.copyOf(eligibleActions(tx, segment));
+        if (enforced.requiresHumanSignoff()) {
+            trace.add("BOUNDS_CHECK", "RulesEngine flagged human sign-off required: " + enforced.signoffReason());
+        } else if (proposed != null && !allowed.contains(proposed.action())) {
+            trace.add("BOUNDS_CHECK", "Proposed action " + proposed.action() + " was NOT in eligible set — corrected to " + enforced.decision().action());
+        } else {
+            trace.add("BOUNDS_CHECK", "Proposed action " + proposed.action() + " is within segment bounds (" + segment + ") — no correction needed");
         }
         return enforced;
     }

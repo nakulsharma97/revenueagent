@@ -44,11 +44,11 @@ Pulled from `application.properties` → `BoundsConfig.java` → `RulesEngine.ja
 
 | Rule | Default limit |
 |---|---|
-| Max retry attempts per item | 3 |
+| Max retry attempts per item | 3 (STANDARD) · 5 (HIGH_VALUE) |
 | Cooldown between retries | 60 minutes |
-| Max discount the agent can offer | 15% |
+| Max discount the agent can offer | 15% (STANDARD) · 25% (HIGH_VALUE) |
 | Minimum amount eligible for a discount | ₹500 |
-| Actions requiring human sign-off | Discount above the ceiling, or 3rd consecutive failure |
+| Actions requiring human sign-off | Discount above the segment's ceiling, or the last retry before the segment's limit |
 | **Idempotency guarantee** | **DB unique constraint on `eventId` + application-level pre-check; second batch run skips already-recovered items** |
 | **Held-out evaluation split** | **20% of each entity type is held out (random, fixed seed); agent never sees these items; held-out metrics reported separately** |
 
@@ -89,47 +89,20 @@ cd backend && mvn spring-boot:run
 
 Without these, `DecisionAgentService` falls back to a deterministic heuristic path — the demo never breaks.
 
-## Results (actual run — 320-item multi-source batch, heuristic fallback)
+## Results — how to read the demo numbers
 
-**Full batch:**
-| Metric | Value |
-|---|---|
-| Transactions at risk | 320 |
-| Recovered | 119 (37.2% recovery rate) |
-| Revenue recovered | ₹66,18,899 |
-| Intervention cost | ₹1.70 |
-| **Net recovered** | **₹66,18,897** |
-| Naive baseline (retry-once) | ₹27,56,627 |
-| **Agent advantage** | **₹38,62,270 more than baseline (+140%)** |
+The seeded dataset and every mock outcome are **deterministic** (all `Random` instances are fixed-seed `42`), so a fresh run of the same code on the same database state reproduces the same decisions and the same metrics. The exact headline figures (recovery rate, net revenue recovered, uplift deltas) are **computed live by the backend** from the actual batch, so the numbers on the dashboard are always internally consistent — do not hardcode them into a script.
 
-**Silent-first recovery:**
-| Metric | Value |
-|---|---|
-| Silent recovery rate | 4.1% of recovered revenue from background-only retries |
-| First-attempt retryable failures | Use `RETRY_SILENT` — zero customer contact |
-| Customer-facing actions | Only after silent path is exhausted |
+What the seeded run guarantees (structural, not random):
 
-**Customer segment-aware bounds:**
-| Segment | At Risk | Recovered | Rate | Revenue |
-|---|---|---|---|---|
-| STANDARD | 160 | 64 | 40.0% | ₹1,19,336 |
-| HIGH_VALUE (top 20%) | 40 | 19 | 47.5% | ₹1,51,981 |
+- **320 items auto-seeded** on startup: 200 payment failures + 80 abandoned checkouts + 40 overdue receivables. A recovery batch auto-runs so the dashboard is populated on first load.
+- **~20% of each source is held out** (evaluation-only, never touched by the agent's tuning) and **~15% is a control group** that receives no agent intervention — both reproducible from the fixed seed.
+- **~Top 20% by transaction value are HIGH_VALUE customers** with wider bounds: 5 retries / 25% discount ceiling vs 3 retries / 15% for STANDARD.
+- **Silent-first recovery:** first-attempt retryable payment failures get `RETRY_SILENT` (zero customer contact); customer-facing actions only open up after the silent path is exhausted.
+- **B2B receivables KPIs** (DSO, average days overdue, promise-keep rate) and the **held-out subset metrics** are shown live in the Reports page.
+- **Agent vs baseline** and **uplift analysis (control vs treatment by segment)** are computed from the actual attempt ledger at runtime.
 
-HIGH_VALUE customers get wider bounds: 5 retries (vs 3), 25% discount ceiling (vs 15%).
-
-**B2B receivables KPIs:**
-| Metric | Value |
-|---|---|
-| Days Sales Outstanding (DSO) | 61.0 days |
-| Average days overdue | 40.1 days |
-| Promise-keep rate | 85.7% |
-
-**Held-out subset (20%, never used to tune the agent's logic):** numbers computed by `GET /api/metrics?scope=held-out` — the held-out recovery rate and net revenue are close to but not identical to the full-batch numbers, confirming the split is real and the agent generalises beyond its training batch.
-
-**By source:**
-- Payment failures: 83/200 recovered (41.5%)
-- Checkout abandonment: 18/80 recovered (22.5%)
-- Overdue receivables: 18/40 recovered (45%)
+Run the app, click **Run Batch**, and read the cards/charts for the current figures — the **Net recovered vs baseline** chart is the headline number, and the **Reports → Uplift Analysis** table shows which segment actually benefits from intervention.
 
 ## Uplift-aware targeting
 
@@ -146,15 +119,7 @@ Not every recovered rupee required the agent's help — some customers would hav
 
 The `RulesEngine` enforces this in code: SURE_THING and LOST_CAUSE entities have `OFFER_DISCOUNT` removed from their eligible action set; DO_NOT_DISTURB entities have both `SEND_PAYMENT_LINK` and `OFFER_DISCOUNT` removed. This is a real tightening of the bounded-action set, not just a label.
 
-**Measured result from a 320-item batch:**
-| Segment | Control Recovery | Treatment Recovery | Uplift (Δ) |
-|---|---|---|---|
-| SURE_THING | ~22% | ~25% | +3pp (intervention adds little) |
-| PERSUADABLE | ~15% | ~49% | +34pp (intervention clearly helps) |
-| DO_NOT_DISTURB | ~18% | ~12% | -6pp (less is more — silent-only policy correct) |
-| LOST_CAUSE | ~2% | ~2% | 0pp (hard declines don't bend) |
-
-The Persuadable segment's +34pp uplift is the proof of concept: the agent spends its discount budget and customer messages where they demonstrably change the outcome, not where they'd be wasted.
+**Where to see it live:** Reports → **Uplift Analysis** shows the control-vs-treatment recovery rates and the per-segment delta (Δ) computed from the actual attempt ledger after each batch. The expected shape, from the probability models above: PERSUADABLE shows the largest positive delta (intervention clearly helps), SURE_THING and LOST_CAUSE deltas are near zero (intervention adds little), and DO_NOT_DISTURB can be slightly negative — evidence that the silent-only policy is correct for that segment. The precise percentages are computed at runtime from the deterministic seed; they are always visible on the dashboard rather than asserted in prose.
 
 *Based on uplift modeling / conditional average treatment effect (CATE) estimation, an established technique in causal inference for targeting interventions — used in production by companies like Criteo for ad targeting and studied extensively for churn/retention use cases.*
 
@@ -182,12 +147,16 @@ The Persuadable segment's +34pp uplift is the proof of concept: the agent spends
 | GET | `/api/metrics/simulate?maxRetries=X&maxDiscountPercent=Y` | What-if simulator (projects impact of bounds changes) |
 | GET | `/api/metrics/uplift` | Uplift analysis: control vs treatment recovery by segment |
 | POST | `/api/recovery/run-batch` | Execute a recovery batch |
-| GET | `/api/recovery/transactions` | All seeded transactions |
+| GET | `/api/recovery/transactions` | All seeded transactions (DTOs — safe with OSIV off) |
 | GET | `/api/recovery/receivables` | All receivables with promise-to-pay data |
+| GET | `/api/recovery/attempts` | Persisted recovery attempts, newest first (survives page refresh) |
+| GET | `/api/recovery/attempts/{id}/trace` | Full decision trace for one attempt |
 | GET | `/api/recovery/pending-review` | Items requiring human sign-off |
 | PUT | `/api/recovery/attempts/{id}/signoff` | Approve/reject a human sign-off request |
 | GET | `/api/recovery/export` | CSV export of all attempts |
-| POST | `/api/webhooks/razorpay/payment-failed` | Razorpay webhook ingestion (shape-compatible) |
+| POST | `/api/webhooks/razorpay/payment-failed` | Razorpay webhook ingestion (idempotent via eventId) |
+| GET | `/api/recovery/run-batch/stream` | SSE streaming batch (total → attempt events → done counts) |
+| GET | `/api/audit` | Audit trail (batch/decision/execution events) |
 | GET | `/api/config/bounds` | Current recovery bounds (incl. HV bounds) |
 | PUT | `/api/config/bounds` | Update bounds at runtime (incl. HV bounds) |
 

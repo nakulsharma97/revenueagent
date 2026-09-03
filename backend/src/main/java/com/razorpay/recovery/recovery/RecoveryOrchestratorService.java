@@ -2,10 +2,14 @@ package com.razorpay.recovery.recovery;
 import com.razorpay.recovery.recovery.RecoveryAttempt.AttemptOutcome;
 import com.razorpay.recovery.recovery.RecoveryAttempt.RecoveryAction;
 import com.razorpay.recovery.recovery.RecoveryAttempt.SourceType;
+import com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment;
 
+import com.razorpay.recovery.audit.AuditEvent;
+import com.razorpay.recovery.audit.AuditService;
 import com.razorpay.recovery.config.BoundsConfig;
 import com.razorpay.recovery.checkout.CheckoutSession;
 import com.razorpay.recovery.checkout.CheckoutSession.CheckoutStatus;
+import com.razorpay.recovery.customer.Customer;
 import com.razorpay.recovery.receivable.Receivable;
 import com.razorpay.recovery.receivable.Receivable.ReceivableStatus;
 import com.razorpay.recovery.transaction.Transaction;
@@ -28,7 +32,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -37,6 +40,12 @@ import java.util.function.Consumer;
  * [1] Detection -> [2] Diagnosis -> [3] Decision -> [4] Execution -> [5] Ledger
  *
  * Handles: payment failures (subscription dunning), checkout abandonment, B2B overdue receivables.
+ *
+ * <p><b>Single processing core.</b> Every batch entry point — the blocking REST endpoint
+ * ({@link #runBatch()}), the SSE streaming endpoint ({@link #runBatchWithCallback}), the startup
+ * auto-run, and the scheduled run — funnels through {@link #runBatchWithCallback}, so REST and
+ * streaming can never produce different decisions for the same entity. Control-group handling,
+ * uplift segmentation, and customer-segment-aware bounds are applied identically everywhere.
  */
 @Service
 public class RecoveryOrchestratorService {
@@ -51,27 +60,10 @@ public class RecoveryOrchestratorService {
     private final BoundsConfig boundsConfig;
     private final RulesEngine rulesEngine;
     private final UpliftSegmentationService upliftService;
+    private final AuditService auditService;
 
     private int getCooldownMinutes() { return boundsConfig.getRetryCooldownMinutes(); }
     private int getMaxRetries() { return boundsConfig.getMaxRetries(); }
-
-    /**
-     * Application-level idempotency guard: returns true if this entity's eventId already
-     * has a SUCCESS recovery attempt — in which case the orchestrator skips re-execution.
-     * The DB unique constraint on eventId is the guarantee-of-last-resort.
-     */
-    private boolean alreadyRecovered(Transaction tx) {
-        return tx.getEventId() != null
-                && attemptRepository.existsByTransactionEventIdAndOutcome(tx.getEventId(), AttemptOutcome.SUCCESS);
-    }
-    private boolean alreadyRecoveredSession(CheckoutSession session) {
-        return session.getEventId() != null
-                && attemptRepository.existsByCheckoutSessionEventIdAndOutcome(session.getEventId(), AttemptOutcome.SUCCESS);
-    }
-    private boolean alreadyRecoveredReceivable(Receivable receivable) {
-        return receivable.getEventId() != null
-                && attemptRepository.existsByReceivableEventIdAndOutcome(receivable.getEventId(), AttemptOutcome.SUCCESS);
-    }
 
     private final AtomicBoolean batchRunning = new AtomicBoolean(false);
 
@@ -84,7 +76,8 @@ public class RecoveryOrchestratorService {
                                         MockNotificationService notificationService,
                                         BoundsConfig boundsConfig,
                                         RulesEngine rulesEngine,
-                                        UpliftSegmentationService upliftService) {
+                                        UpliftSegmentationService upliftService,
+                                        AuditService auditService) {
         this.transactionRepository = transactionRepository;
         this.checkoutSessionRepository = checkoutSessionRepository;
         this.receivableRepository = receivableRepository;
@@ -95,12 +88,20 @@ public class RecoveryOrchestratorService {
         this.boundsConfig = boundsConfig;
         this.rulesEngine = rulesEngine;
         this.upliftService = upliftService;
+        this.auditService = auditService;
+    }
+
+    /** True while a batch is executing — lets callers (e.g. the scheduler) skip gracefully. */
+    public boolean isBatchRunning() {
+        return batchRunning.get();
     }
 
     /**
      * Count eligible items across all 3 sources WITHOUT processing them.
      * Used by the SSE endpoint to send a 'total' event before the batch starts,
      * so the frontend progress bar can show accurate percentage.
+     * The predicates here MUST match the worklist queries in {@link #runBatchWithCallback}
+     * exactly — they are the single source of truth for the batch size.
      */
     public int countEligible() {
         int payments = transactionRepository.findByStatusIn(
@@ -113,28 +114,18 @@ public class RecoveryOrchestratorService {
     }
 
     /**
-     * Runs ALL three recovery pipelines and returns combined attempts.
+     * Blocking batch (POST /api/recovery/run-batch). Delegates to the shared streaming
+     * implementation with a no-op callback so both paths share identical business logic.
      */
     @Transactional
     public List<RecoveryAttempt> runBatch() {
-        if (!batchRunning.compareAndSet(false, true)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Batch already running");
-        }
-        try {
-            String batchId = UUID.randomUUID().toString();
-            List<RecoveryAttempt> results = new java.util.ArrayList<>();
-            results.addAll(runPaymentBatch(batchId));
-            results.addAll(runCheckoutBatch(batchId));
-            results.addAll(runReceivablesBatch(batchId));
-            return results;
-        } finally {
-            batchRunning.set(false);
-        }
+        return runBatchWithCallback(a -> { });
     }
 
     /**
-     * Streaming variant: processes all 3 source types IN PARALLEL and calls onAttempt
-     * after EACH item completes — so the frontend gets incremental progress, not per-source jumps.
+     * Streaming variant: the single canonical batch implementation used by EVERY entry point.
+     * Emits each attempt via {@code onAttempt} as it completes, so the frontend gets
+     * incremental progress; the blocking path passes a no-op callback.
      */
     @Transactional
     public List<RecoveryAttempt> runBatchWithCallback(Consumer<RecoveryAttempt> onAttempt) {
@@ -143,17 +134,47 @@ public class RecoveryOrchestratorService {
         }
         try {
             String batchId = UUID.randomUUID().toString();
-            List<RecoveryAttempt> all = new ArrayList<>();
+            audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.BATCH_STARTED,
+                    "BATCH", batchId, "Recovery batch started");
 
             // Preload ALL existing SUCCESS event IDs in 3 bulk queries
-            // (instead of 320 individual DB queries per item)
+            // (instead of hundreds of individual DB queries per item)
             Set<String> recoveredTxEvents = attemptRepository.findSuccessfulTransactionEventIds();
             Set<String> recoveredSessionEvents = attemptRepository.findSuccessfulCheckoutEventIds();
             Set<String> recoveredReceivableEvents = attemptRepository.findSuccessfulReceivableEventIds();
 
-            all.addAll(runPaymentBatchStreaming(batchId, onAttempt, recoveredTxEvents));
-            all.addAll(runCheckoutBatchStreaming(batchId, onAttempt, recoveredSessionEvents));
-            all.addAll(runReceivablesBatchStreaming(batchId, onAttempt, recoveredReceivableEvents));
+            List<RecoveryAttempt> all = new ArrayList<>();
+
+            // ── Payment failures (subscription dunning) ──
+            for (Transaction tx : transactionRepository.findByStatusIn(
+                    List.of(TransactionStatus.AT_RISK, TransactionStatus.IN_RECOVERY))) {
+                RecoveryAttempt attempt = processPaymentNoSave(tx, batchId, recoveredTxEvents);
+                transactionRepository.save(tx);
+                persistAndEmit(attempt, all, onAttempt);
+            }
+
+            // ── Checkout abandonment ──
+            for (CheckoutSession session : checkoutSessionRepository.findByStatusIn(
+                    List.of(CheckoutStatus.ABANDONED))) {
+                RecoveryAttempt attempt = processCheckoutNoSave(session, batchId, recoveredSessionEvents);
+                checkoutSessionRepository.save(session);
+                persistAndEmit(attempt, all, onAttempt);
+            }
+
+            // ── B2B overdue receivables ──
+            for (Receivable receivable : receivableRepository.findByStatusIn(
+                    List.of(ReceivableStatus.OVERDUE))) {
+                RecoveryAttempt attempt = processReceivableNoSave(receivable, batchId, recoveredReceivableEvents);
+                receivableRepository.save(receivable);
+                persistAndEmit(attempt, all, onAttempt);
+            }
+
+            long succeeded = all.stream().filter(a -> a.getOutcome() == AttemptOutcome.SUCCESS).count();
+            long failed = all.stream().filter(a -> a.getOutcome() == AttemptOutcome.FAILED).count();
+            long skipped = all.stream().filter(a -> a.getOutcome() == AttemptOutcome.SKIPPED).count();
+            audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.BATCH_COMPLETED,
+                    "BATCH", batchId, "Recovery batch completed: " + all.size() + " attempts ("
+                            + succeeded + " succeeded, " + failed + " failed, " + skipped + " skipped)");
 
             return all;
         } finally {
@@ -161,86 +182,18 @@ public class RecoveryOrchestratorService {
         }
     }
 
-    /** Payment failure recovery — the original pipeline. */
-    @Transactional
-    public List<RecoveryAttempt> runPaymentBatch(String batchId) {
-        List<Transaction> eligible = transactionRepository.findByStatusIn(
-                List.of(TransactionStatus.AT_RISK, TransactionStatus.IN_RECOVERY));
-        return eligible.stream().map(tx -> processPayment(tx, batchId)).toList();
+    /**
+     * Persist one attempt (flush → real id assigned), then hand it to the SSE callback,
+     * so streamed events carry usable ids and earlier attempts survive a mid-batch failure.
+     */
+    private void persistAndEmit(RecoveryAttempt attempt, List<RecoveryAttempt> all, Consumer<RecoveryAttempt> onAttempt) {
+        attemptRepository.saveAndFlush(attempt);
+        all.add(attempt);
+        onAttempt.accept(attempt);
     }
-
-    /** Checkout abandonment recovery. */
-    @Transactional
-    public List<RecoveryAttempt> runCheckoutBatch(String batchId) {
-        List<CheckoutSession> eligible = checkoutSessionRepository.findByStatusIn(
-                List.of(CheckoutStatus.ABANDONED));
-        return eligible.stream().map(session -> processCheckout(session, batchId)).toList();
-    }
-
-    /** B2B overdue receivables recovery. */
-    @Transactional
-    public List<RecoveryAttempt> runReceivablesBatch(String batchId) {
-        List<Receivable> eligible = receivableRepository.findByStatusIn(
-                List.of(ReceivableStatus.OVERDUE));
-        return eligible.stream().map(r -> processReceivable(r, batchId)).toList();
-    }
-
-    // ── Streaming versions: emit per-item via callback ──
-
-    private List<RecoveryAttempt> runPaymentBatchStreaming(String batchId, Consumer<RecoveryAttempt> onAttempt, Set<String> alreadyRecoveredEvents) {
-        List<Transaction> eligible = transactionRepository.findByStatusIn(
-                List.of(TransactionStatus.AT_RISK, TransactionStatus.IN_RECOVERY));
-        List<Transaction> txToUpdate = new ArrayList<>();
-        List<RecoveryAttempt> attempts = new ArrayList<>();
-        for (Transaction tx : eligible) {
-            RecoveryAttempt attempt = processPaymentNoSave(tx, batchId, alreadyRecoveredEvents);
-            txToUpdate.add(tx);
-            attempts.add(attempt);
-            onAttempt.accept(attempt); // emit immediately per-item
-        }
-        transactionRepository.saveAll(txToUpdate);
-        attemptRepository.saveAll(attempts);
-        return attempts;
-    }
-
-    private List<RecoveryAttempt> runCheckoutBatchStreaming(String batchId, Consumer<RecoveryAttempt> onAttempt, Set<String> alreadyRecoveredEvents) {
-        List<CheckoutSession> eligible = checkoutSessionRepository.findByStatusIn(
-                List.of(CheckoutStatus.ABANDONED));
-        List<CheckoutSession> sessionsToUpdate = new ArrayList<>();
-        List<RecoveryAttempt> attempts = new ArrayList<>();
-        for (CheckoutSession session : eligible) {
-            RecoveryAttempt attempt = processCheckoutNoSave(session, batchId, alreadyRecoveredEvents);
-            sessionsToUpdate.add(session);
-            attempts.add(attempt);
-            onAttempt.accept(attempt);
-        }
-        checkoutSessionRepository.saveAll(sessionsToUpdate);
-        attemptRepository.saveAll(attempts);
-        return attempts;
-    }
-
-    private List<RecoveryAttempt> runReceivablesBatchStreaming(String batchId, Consumer<RecoveryAttempt> onAttempt, Set<String> alreadyRecoveredEvents) {
-        List<Receivable> eligible = receivableRepository.findByStatusIn(
-                List.of(ReceivableStatus.OVERDUE));
-        List<Receivable> receivablesToUpdate = new ArrayList<>();
-        List<RecoveryAttempt> attempts = new ArrayList<>();
-        for (Receivable receivable : eligible) {
-            RecoveryAttempt attempt = processReceivableNoSave(receivable, batchId, alreadyRecoveredEvents);
-            receivablesToUpdate.add(receivable);
-            attempts.add(attempt);
-            onAttempt.accept(attempt);
-        }
-        receivableRepository.saveAll(receivablesToUpdate);
-        attemptRepository.saveAll(attempts);
-        return attempts;
-    }
-
-
-
-
 
     // ═══════════════════════════════════════════════════════════════
-    // Process one payment failure (batch save variant — no individual save)
+    // Process one payment failure (canonical, no individual save — caller persists)
     // ═══════════════════════════════════════════════════════════════
 
     private RecoveryAttempt processPaymentNoSave(Transaction tx, String batchId, Set<String> alreadyRecoveredEvents) {
@@ -250,46 +203,54 @@ public class RecoveryOrchestratorService {
         // ── Control group: no intervention, just monitor natural recovery ──
         if (tx.isControlGroup()) {
             trace.add("CONTROL_GROUP", "Entity is in control group — no agent intervention. Monitoring natural recovery.");
-            com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(tx);
+            UpliftSegment segment = upliftService.classify(tx);
             boolean naturalSuccess = paymentGateway.attemptCharge(tx); // same probability model, zero intervention
             trace.add("NATURAL_RECOVERY", "MockPaymentGatewayService.attemptCharge(TX#" + tx.getId() + ") -> " + (naturalSuccess ? "SUCCESS" : "FAILED") + " (no intervention)");
-            RecoveryAttempt attempt = new RecoveryAttempt();
-            attempt.setSourceType(SourceType.PAYMENT);
-            attempt.setTransaction(tx);
-            attempt.setActionTaken(RecoveryAction.NO_ACTION);
-            attempt.setReasoning("Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
-            attempt.setConfidence(1.0);
-            attempt.setOutcome(naturalSuccess ? AttemptOutcome.SUCCESS : AttemptOutcome.FAILED);
-            attempt.setAmountRecovered(naturalSuccess ? tx.getAmount() : BigDecimal.ZERO);
-            attempt.setBatchId(batchId);
-            attempt.setExecutedAt(LocalDateTime.now());
-            attempt.setUpliftSegment(segment);
-            attempt.setDecisionTrace(trace);
-            return attempt;
+            audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.RECOVERY_ATTEMPT_SKIPPED,
+                    "TRANSACTION", String.valueOf(tx.getId()), "Control group — no agent intervention applied");
+            if (naturalSuccess) {
+                tx.setStatus(TransactionStatus.RECOVERED); // recovered naturally — leave the worklist
+            }
+            return buildControlAttempt(SourceType.PAYMENT, tx, null, null, batchId, segment, naturalSuccess, trace,
+                    "Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
         }
 
+        // ── Idempotency guard: skip if already successfully recovered ──
         if (tx.getEventId() != null && alreadyRecoveredEvents.contains(tx.getEventId())) {
             trace.add("IDEMPOTENCY_SKIP", "EventId=" + tx.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
-            return persistSkip(tx, null, null, batchId, 0, trace);
+            audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.RECOVERY_ATTEMPT_IDEMPOTENT_SKIP,
+                    "TRANSACTION", String.valueOf(tx.getId()), "eventId=" + tx.getEventId() + " already recovered — skipping");
+            return persistSkip(tx, null, null, batchId, trace, SkipReason.IDEMPOTENCY,
+                    "eventId=" + tx.getEventId() + " already has a SUCCESS recovery — skipped to prevent double-count");
         }
 
+        // ── Cooldown guard ──
         if (tx.getLastAttemptAt() != null) {
             long minSince = Duration.between(tx.getLastAttemptAt(), LocalDateTime.now()).toMinutes();
             if (minSince < getCooldownMinutes()) {
                 trace.add("COOLDOWN_SKIP", "Last attempt " + minSince + "min ago, cooldown is " + getCooldownMinutes() + "min — skipping.");
-                return persistSkip(tx, null, null, batchId, minSince, trace);
+                audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.COOLDOWN_ACTIVE,
+                        "TRANSACTION", String.valueOf(tx.getId()), "Cooldown active — last attempt " + minSince + "min ago");
+                return persistSkip(tx, null, null, batchId, trace, SkipReason.COOLDOWN,
+                        "Last attempt " + minSince + "min ago, cooldown is " + getCooldownMinutes() + "min — skipped");
             }
         }
 
         // ── Classify uplift segment ──
-        com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(tx);
+        UpliftSegment segment = upliftService.classify(tx);
         trace.add("UPLIFT_CLASSIFY", "Segment: " + segment + " (reliability=" + (tx.getSubscription() != null && tx.getSubscription().getCustomer() != null ? tx.getSubscription().getCustomer().getPaymentReliabilityScore() : 0.5) + ", retryCount=" + tx.getRetryCount() + ", amount=" + tx.getAmount() + ")");
 
-        DecisionResult result = decisionAgentService.decideWithMeta(tx, trace);
+        // ── Segment-aware decision (HIGH_VALUE gets wider bounds) ──
+        Customer.CustomerSegment customerSegment = decisionAgentService.segmentOf(tx);
+        int segmentMaxRetries = boundsConfig.boundsFor(customerSegment).maxRetries();
+        DecisionResult result = decisionAgentService.decideWithMeta(tx, customerSegment, trace);
         LlmDecision decision = result.decision();
+        audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.AI_RECOMMENDATION_RECEIVED,
+                "TRANSACTION", String.valueOf(tx.getId()),
+                "Decision: " + decision.action() + " (confidence " + decision.confidence() + ", llmDriven=" + result.llmDriven() + ")");
 
         // ── Apply uplift-segment filter to eligible actions ──
-        List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx);
+        List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx, customerSegment);
         rulesEngine.filterByUpliftSegment(eligible, segment);
         if (!eligible.contains(decision.action())) {
             // Original choice filtered out by uplift segment — pick the first remaining eligible action
@@ -314,59 +275,10 @@ public class RecoveryOrchestratorService {
 
         boolean success = executePayment(tx, decision, attempt);
         trace.add("EXECUTION", "MockPaymentGatewayService.attemptCharge(TX#" + tx.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
-        applyPaymentOutcome(tx, attempt, success);
+        applyPaymentOutcome(tx, attempt, success, segmentMaxRetries);
+        auditExecution(batchId, "TRANSACTION", String.valueOf(tx.getId()), decision.action().name(), success, attempt.getAmountRecovered());
 
-        // No individual save — batch saved by caller
         return attempt;
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // Process one payment failure (single-save variant for runBatch)
-    // ═══════════════════════════════════════════════════════════════
-
-    private RecoveryAttempt processPayment(Transaction tx, String batchId) {
-        DecisionTrace trace = new DecisionTrace();
-        trace.add("DETECTION", "Transaction TX#" + tx.getId() + " flagged as AT_RISK (amount=" + tx.getAmount() + ", failureReason=" + tx.getFailureReason() + ")");
-
-        // ── Idempotency guard: skip if already successfully recovered ──
-        if (alreadyRecovered(tx)) {
-            trace.add("IDEMPOTENCY_SKIP", "EventId=" + tx.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
-            org.slf4j.LoggerFactory.getLogger(RecoveryOrchestratorService.class)
-                    .info("Idempotency: skipping TX#{} (eventId={}) — already recovered", tx.getId(), tx.getEventId());
-            return persistSkip(tx, null, null, batchId, 0, trace);
-        }
-
-        if (tx.getLastAttemptAt() != null) {
-            long minSince = Duration.between(tx.getLastAttemptAt(), LocalDateTime.now()).toMinutes();
-            if (minSince < getCooldownMinutes()) {
-                trace.add("COOLDOWN_SKIP", "Last attempt " + minSince + "min ago, cooldown is " + getCooldownMinutes() + "min — skipping.");
-                return persistSkip(tx, null, null, batchId, minSince, trace);
-            }
-        }
-
-        DecisionResult result = decisionAgentService.decideWithMeta(tx, trace);
-        LlmDecision decision = result.decision();
-
-        RecoveryAttempt attempt = new RecoveryAttempt();
-        attempt.setSourceType(SourceType.PAYMENT);
-        attempt.setTransaction(tx);
-        attempt.setActionTaken(decision.action());
-        attempt.setReasoning(decision.reasoning());
-        attempt.setConfidence(decision.confidence());
-        attempt.setLlmDriven(result.llmDriven());
-        attempt.setBatchId(batchId);
-        attempt.setExecutedAt(LocalDateTime.now());
-        attempt.setRequiresHumanSignoff(result.requiresHumanSignoff());
-        attempt.setSignoffReason(result.signoffReason());
-        attempt.setDecisionTrace(trace);
-        attempt.setCustomerMessage(decision.customerMessage());
-
-        boolean success = executePayment(tx, decision, attempt);
-        trace.add("EXECUTION", "MockPaymentGatewayService.attemptCharge(TX#" + tx.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
-        applyPaymentOutcome(tx, attempt, success);
-
-        transactionRepository.save(tx);
-        return attemptRepository.save(attempt);
     }
 
     private boolean executePayment(Transaction tx, LlmDecision decision, RecoveryAttempt attempt) {
@@ -396,44 +308,76 @@ public class RecoveryOrchestratorService {
         };
     }
 
-    private void applyPaymentOutcome(Transaction tx, RecoveryAttempt attempt, boolean success) {
+    /**
+     * Applies the outcome of an executed action to the transaction.
+     * The LOST threshold is the <em>segment's</em> retry limit, so a HIGH_VALUE
+     * customer (limit 5) is only written off after 5 failed retries, while a
+     * STANDARD customer (limit 3) is written off after 3.
+     */
+    private void applyPaymentOutcome(Transaction tx, RecoveryAttempt attempt, boolean success, int segmentMaxRetries) {
         attempt.setOutcome(success ? AttemptOutcome.SUCCESS : AttemptOutcome.FAILED);
         if (success) {
             attempt.setAmountRecovered(tx.getAmount());
             tx.setStatus(TransactionStatus.RECOVERED);
         } else {
             tx.setRetryCount(tx.getRetryCount() + 1);
-            tx.setStatus(tx.getRetryCount() >= getMaxRetries() ? TransactionStatus.LOST : TransactionStatus.IN_RECOVERY);
+            tx.setStatus(tx.getRetryCount() >= segmentMaxRetries ? TransactionStatus.LOST : TransactionStatus.IN_RECOVERY);
         }
         tx.setLastAttemptAt(LocalDateTime.now());
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Process one checkout abandonment
+    // Process one checkout abandonment (canonical — the caller persists)
     // ═══════════════════════════════════════════════════════════════
 
-    private RecoveryAttempt processCheckout(CheckoutSession session, String batchId) {
+    private RecoveryAttempt processCheckoutNoSave(CheckoutSession session, String batchId, Set<String> alreadyRecoveredEvents) {
         DecisionTrace trace = new DecisionTrace();
         trace.add("DETECTION", "CheckoutSession#" + session.getId() + " flagged as ABANDONED (amount=" + session.getCartAmount() + ", reason=" + session.getAbandonmentReason() + ")");
 
-        // ── Idempotency guard: skip if already successfully recovered ──
-        if (alreadyRecoveredSession(session)) {
-            trace.add("IDEMPOTENCY_SKIP", "EventId=" + session.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
-            org.slf4j.LoggerFactory.getLogger(RecoveryOrchestratorService.class)
-                    .info("Idempotency: skipping Checkout#{} (eventId={}) — already recovered", session.getId(), session.getEventId());
-            return persistSkip(null, session, null, batchId, 0, trace);
+        // ── Control group: no intervention ──
+        if (session.isControlGroup()) {
+            trace.add("CONTROL_GROUP", "Entity is in control group — no agent intervention.");
+            UpliftSegment segment = upliftService.classify(session);
+            boolean naturalSuccess = notificationService.sendCheckoutReminder(session); // same baseline, no discount
+            trace.add("NATURAL_RECOVERY", "Natural recovery for Checkout#" + session.getId() + " -> " + (naturalSuccess ? "SUCCESS" : "FAILED"));
+            audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.RECOVERY_ATTEMPT_SKIPPED,
+                    "CHECKOUT_SESSION", String.valueOf(session.getId()), "Control group — no agent intervention applied");
+            if (naturalSuccess) {
+                session.setStatus(CheckoutStatus.RECOVERED); // recovered naturally — leave the worklist
+            }
+            return buildControlAttempt(SourceType.CHECKOUT, null, session, null, batchId, segment, naturalSuccess, trace,
+                    "Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
         }
 
+        // ── Idempotency guard ──
+        if (session.getEventId() != null && alreadyRecoveredEvents.contains(session.getEventId())) {
+            trace.add("IDEMPOTENCY_SKIP", "EventId=" + session.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
+            audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.RECOVERY_ATTEMPT_IDEMPOTENT_SKIP,
+                    "CHECKOUT_SESSION", String.valueOf(session.getId()), "eventId=" + session.getEventId() + " already recovered — skipping");
+            return persistSkip(null, session, null, batchId, trace, SkipReason.IDEMPOTENCY,
+                    "eventId=" + session.getEventId() + " already has a SUCCESS recovery — skipped to prevent double-count");
+        }
+
+        // ── Cooldown guard ──
         if (session.getAbandonedAt() != null) {
             long minSince = Duration.between(session.getAbandonedAt(), LocalDateTime.now()).toMinutes();
             if (minSince < getCooldownMinutes()) {
                 trace.add("COOLDOWN_SKIP", "Abandoned " + minSince + "min ago, cooldown is " + getCooldownMinutes() + "min — skipping.");
-                return persistSkip(null, session, null, batchId, minSince, trace);
+                audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.COOLDOWN_ACTIVE,
+                        "CHECKOUT_SESSION", String.valueOf(session.getId()), "Cooldown active — abandoned " + minSince + "min ago");
+                return persistSkip(null, session, null, batchId, trace, SkipReason.COOLDOWN,
+                        "Abandoned " + minSince + "min ago, cooldown is " + getCooldownMinutes() + "min — skipped");
             }
         }
 
+        UpliftSegment segment = upliftService.classify(session);
+        trace.add("UPLIFT_CLASSIFY", "Segment: " + segment);
+
         DecisionResult result = decisionAgentService.decideWithMetaCheckout(session, trace);
         LlmDecision decision = result.decision();
+        audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.AI_RECOMMENDATION_RECEIVED,
+                "CHECKOUT_SESSION", String.valueOf(session.getId()),
+                "Decision: " + decision.action() + " (confidence " + decision.confidence() + ", llmDriven=" + result.llmDriven() + ")");
 
         RecoveryAttempt attempt = new RecoveryAttempt();
         attempt.setSourceType(SourceType.CHECKOUT);
@@ -448,13 +392,14 @@ public class RecoveryOrchestratorService {
         attempt.setSignoffReason(result.signoffReason());
         attempt.setDecisionTrace(trace);
         attempt.setCustomerMessage(decision.customerMessage());
+        attempt.setUpliftSegment(segment);
 
         boolean success = executeCheckout(session, decision, attempt);
         trace.add("EXECUTION", "MockNotificationService.execute(Checkout#" + session.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
         applyCheckoutOutcome(session, attempt, success);
+        auditExecution(batchId, "CHECKOUT_SESSION", String.valueOf(session.getId()), decision.action().name(), success, attempt.getAmountRecovered());
 
-        checkoutSessionRepository.save(session);
-        return attemptRepository.save(attempt);
+        return attempt;
     }
 
     private boolean executeCheckout(CheckoutSession session, LlmDecision decision, RecoveryAttempt attempt) {
@@ -463,7 +408,8 @@ public class RecoveryOrchestratorService {
         return switch (decision.action()) {
             case CHECKOUT_REMINDER -> notificationService.sendCheckoutReminder(session);
             case SEND_PAYMENT_LINK -> {
-                boolean paid = notificationService.sendCheckoutReminder(session);
+                // Distinct executor: a direct payment link converts better than a generic reminder.
+                boolean paid = notificationService.sendCheckoutPaymentLink(session);
                 attempt.setInterventionCost(notificationService.costOf(false));
                 yield paid;
             }
@@ -494,126 +440,7 @@ public class RecoveryOrchestratorService {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Process one checkout abandonment (batch save variant)
-    // ═══════════════════════════════════════════════════════════════
-
-    private RecoveryAttempt processCheckoutNoSave(CheckoutSession session, String batchId, Set<String> alreadyRecoveredEvents) {
-        DecisionTrace trace = new DecisionTrace();
-        trace.add("DETECTION", "CheckoutSession#" + session.getId() + " flagged as ABANDONED (amount=" + session.getCartAmount() + ", reason=" + session.getAbandonmentReason() + ")");
-
-        // ── Control group: no intervention ──
-        if (session.isControlGroup()) {
-            trace.add("CONTROL_GROUP", "Entity is in control group — no agent intervention.");
-            com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(session);
-            boolean naturalSuccess = notificationService.sendCheckoutReminder(session); // same baseline, no discount
-            trace.add("NATURAL_RECOVERY", "Natural recovery for Checkout#" + session.getId() + " -> " + (naturalSuccess ? "SUCCESS" : "FAILED"));
-            RecoveryAttempt attempt = new RecoveryAttempt();
-            attempt.setSourceType(SourceType.CHECKOUT);
-            attempt.setCheckoutSession(session);
-            attempt.setActionTaken(RecoveryAction.NO_ACTION);
-            attempt.setReasoning("Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
-            attempt.setConfidence(1.0);
-            attempt.setOutcome(naturalSuccess ? AttemptOutcome.SUCCESS : AttemptOutcome.FAILED);
-            attempt.setAmountRecovered(naturalSuccess ? session.getCartAmount() : BigDecimal.ZERO);
-            attempt.setBatchId(batchId);
-            attempt.setExecutedAt(LocalDateTime.now());
-            attempt.setUpliftSegment(segment);
-            attempt.setDecisionTrace(trace);
-            return attempt;
-        }
-
-        if (session.getEventId() != null && alreadyRecoveredEvents.contains(session.getEventId())) {
-            trace.add("IDEMPOTENCY_SKIP", "EventId=" + session.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
-            return persistSkip(null, session, null, batchId, 0, trace);
-        }
-
-        if (session.getAbandonedAt() != null) {
-            long minSince = Duration.between(session.getAbandonedAt(), LocalDateTime.now()).toMinutes();
-            if (minSince < getCooldownMinutes()) {
-                trace.add("COOLDOWN_SKIP", "Abandoned " + minSince + "min ago, cooldown is " + getCooldownMinutes() + "min — skipping.");
-                return persistSkip(null, session, null, batchId, minSince, trace);
-            }
-        }
-
-        com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(session);
-        trace.add("UPLIFT_CLASSIFY", "Segment: " + segment);
-
-        DecisionResult result = decisionAgentService.decideWithMetaCheckout(session, trace);
-        LlmDecision decision = result.decision();
-
-        RecoveryAttempt attempt = new RecoveryAttempt();
-        attempt.setSourceType(SourceType.CHECKOUT);
-        attempt.setCheckoutSession(session);
-        attempt.setActionTaken(decision.action());
-        attempt.setReasoning(decision.reasoning());
-        attempt.setConfidence(decision.confidence());
-        attempt.setLlmDriven(result.llmDriven());
-        attempt.setBatchId(batchId);
-        attempt.setExecutedAt(LocalDateTime.now());
-        attempt.setRequiresHumanSignoff(result.requiresHumanSignoff());
-        attempt.setSignoffReason(result.signoffReason());
-        attempt.setDecisionTrace(trace);
-        attempt.setCustomerMessage(decision.customerMessage());
-        attempt.setUpliftSegment(segment);
-
-        boolean success = executeCheckout(session, decision, attempt);
-        trace.add("EXECUTION", "MockNotificationService.execute(Checkout#" + session.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
-        applyCheckoutOutcome(session, attempt, success);
-
-        return attempt;
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // Process one overdue receivable
-    // ═══════════════════════════════════════════════════════════════
-
-    private RecoveryAttempt processReceivable(Receivable receivable, String batchId) {
-        DecisionTrace trace = new DecisionTrace();
-        trace.add("DETECTION", "Receivable#" + receivable.getId() + " flagged as OVERDUE (amount=" + receivable.getInvoiceAmount() + ", daysOverdue=" + receivable.getDaysOverdue() + ")");
-
-        // ── Idempotency guard: skip if already successfully recovered ──
-        if (alreadyRecoveredReceivable(receivable)) {
-            trace.add("IDEMPOTENCY_SKIP", "EventId=" + receivable.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
-            org.slf4j.LoggerFactory.getLogger(RecoveryOrchestratorService.class)
-                    .info("Idempotency: skipping Receivable#{} (eventId={}) — already recovered", receivable.getId(), receivable.getEventId());
-            return persistSkip(null, null, receivable, batchId, 0, trace);
-        }
-
-        // Promise-to-pay tracking: if promise was made and payment date has passed, mark as BROKEN
-        if (receivable.getPromiseStatus() == com.razorpay.recovery.receivable.Receivable.PromiseStatus.PROMISED
-                && receivable.getPromisedPaymentDate() != null
-                && receivable.getPromisedPaymentDate().isBefore(java.time.LocalDate.now())) {
-            receivable.setPromiseStatus(com.razorpay.recovery.receivable.Receivable.PromiseStatus.BROKEN);
-            trace.add("PROMISE_CHECK", "Promise date " + receivable.getPromisedPaymentDate() + " has passed without payment — status set to BROKEN.");
-        }
-
-        DecisionResult result = decisionAgentService.decideWithMetaReceivable(receivable, trace);
-        LlmDecision decision = result.decision();
-
-        RecoveryAttempt attempt = new RecoveryAttempt();
-        attempt.setSourceType(SourceType.RECEIVABLE);
-        attempt.setReceivable(receivable);
-        attempt.setActionTaken(decision.action());
-        attempt.setReasoning(decision.reasoning());
-        attempt.setConfidence(decision.confidence());
-        attempt.setLlmDriven(result.llmDriven());
-        attempt.setBatchId(batchId);
-        attempt.setExecutedAt(LocalDateTime.now());
-        attempt.setRequiresHumanSignoff(result.requiresHumanSignoff());
-        attempt.setSignoffReason(result.signoffReason());
-        attempt.setDecisionTrace(trace);
-        attempt.setCustomerMessage(decision.customerMessage());
-
-        boolean success = executeReceivable(receivable, decision, attempt);
-        trace.add("EXECUTION", "MockNotificationService.execute(Receivable#" + receivable.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
-        applyReceivableOutcome(receivable, attempt, success);
-
-        receivableRepository.save(receivable);
-        return attemptRepository.save(attempt);
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // Process one overdue receivable (batch save variant)
+    // Process one overdue receivable (canonical — the caller persists)
     // ═══════════════════════════════════════════════════════════════
 
     private RecoveryAttempt processReceivableNoSave(Receivable receivable, String batchId, Set<String> alreadyRecoveredEvents) {
@@ -623,42 +450,45 @@ public class RecoveryOrchestratorService {
         // ── Control group: no intervention ──
         if (receivable.isControlGroup()) {
             trace.add("CONTROL_GROUP", "Entity is in control group — no agent intervention.");
-            com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(receivable);
-            // Simulate natural recovery: flat 25% chance (same as naive reminder baseline)
-            boolean naturalSuccess = new java.util.Random(42).nextDouble() < 0.25;
+            UpliftSegment segment = upliftService.classify(receivable);
+            // Natural recovery: the same baseline conversion model a plain reminder would get
+            // (shared deterministic Random — identical draws across runs for reproducible metrics).
+            boolean naturalSuccess = notificationService.sendReceivableReminder(receivable);
             trace.add("NATURAL_RECOVERY", "Natural recovery for Receivable#" + receivable.getId() + " -> " + (naturalSuccess ? "SUCCESS" : "FAILED"));
-            RecoveryAttempt attempt = new RecoveryAttempt();
-            attempt.setSourceType(SourceType.RECEIVABLE);
-            attempt.setReceivable(receivable);
-            attempt.setActionTaken(RecoveryAction.NO_ACTION);
-            attempt.setReasoning("Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
-            attempt.setConfidence(1.0);
-            attempt.setOutcome(naturalSuccess ? AttemptOutcome.SUCCESS : AttemptOutcome.FAILED);
-            attempt.setAmountRecovered(naturalSuccess ? receivable.getInvoiceAmount() : BigDecimal.ZERO);
-            attempt.setBatchId(batchId);
-            attempt.setExecutedAt(LocalDateTime.now());
-            attempt.setUpliftSegment(segment);
-            attempt.setDecisionTrace(trace);
-            return attempt;
+            audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.RECOVERY_ATTEMPT_SKIPPED,
+                    "RECEIVABLE", String.valueOf(receivable.getId()), "Control group — no agent intervention applied");
+            if (naturalSuccess) {
+                receivable.setStatus(ReceivableStatus.RECOVERED); // recovered naturally — leave the worklist
+            }
+            return buildControlAttempt(SourceType.RECEIVABLE, null, null, receivable, batchId, segment, naturalSuccess, trace,
+                    "Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
         }
 
+        // ── Idempotency guard ──
         if (receivable.getEventId() != null && alreadyRecoveredEvents.contains(receivable.getEventId())) {
             trace.add("IDEMPOTENCY_SKIP", "EventId=" + receivable.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
-            return persistSkip(null, null, receivable, batchId, 0, trace);
+            audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.RECOVERY_ATTEMPT_IDEMPOTENT_SKIP,
+                    "RECEIVABLE", String.valueOf(receivable.getId()), "eventId=" + receivable.getEventId() + " already recovered — skipping");
+            return persistSkip(null, null, receivable, batchId, trace, SkipReason.IDEMPOTENCY,
+                    "eventId=" + receivable.getEventId() + " already has a SUCCESS recovery — skipped to prevent double-count");
         }
 
-        if (receivable.getPromiseStatus() == com.razorpay.recovery.receivable.Receivable.PromiseStatus.PROMISED
+        // Promise-to-pay tracking: if promise was made and payment date has passed, mark as BROKEN
+        if (receivable.getPromiseStatus() == Receivable.PromiseStatus.PROMISED
                 && receivable.getPromisedPaymentDate() != null
                 && receivable.getPromisedPaymentDate().isBefore(java.time.LocalDate.now())) {
-            receivable.setPromiseStatus(com.razorpay.recovery.receivable.Receivable.PromiseStatus.BROKEN);
+            receivable.setPromiseStatus(Receivable.PromiseStatus.BROKEN);
             trace.add("PROMISE_CHECK", "Promise date " + receivable.getPromisedPaymentDate() + " has passed without payment — status set to BROKEN.");
         }
 
-        com.razorpay.recovery.recovery.RecoveryAttempt.UpliftSegment segment = upliftService.classify(receivable);
+        UpliftSegment segment = upliftService.classify(receivable);
         trace.add("UPLIFT_CLASSIFY", "Segment: " + segment);
 
         DecisionResult result = decisionAgentService.decideWithMetaReceivable(receivable, trace);
         LlmDecision decision = result.decision();
+        audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.AI_RECOMMENDATION_RECEIVED,
+                "RECEIVABLE", String.valueOf(receivable.getId()),
+                "Decision: " + decision.action() + " (confidence " + decision.confidence() + ", llmDriven=" + result.llmDriven() + ")");
 
         RecoveryAttempt attempt = new RecoveryAttempt();
         attempt.setSourceType(SourceType.RECEIVABLE);
@@ -678,6 +508,7 @@ public class RecoveryOrchestratorService {
         boolean success = executeReceivable(receivable, decision, attempt);
         trace.add("EXECUTION", "MockNotificationService.execute(Receivable#" + receivable.getId() + ") -> " + (success ? "SUCCESS" : "FAILED") + " | action=" + decision.action());
         applyReceivableOutcome(receivable, attempt, success);
+        auditExecution(batchId, "RECEIVABLE", String.valueOf(receivable.getId()), decision.action().name(), success, attempt.getAmountRecovered());
 
         return attempt;
     }
@@ -709,9 +540,9 @@ public class RecoveryOrchestratorService {
             attempt.setAmountRecovered(receivable.getInvoiceAmount());
             receivable.setStatus(ReceivableStatus.RECOVERED);
             // If a promise was outstanding and payment came through, mark it KEPT
-            if (receivable.getPromiseStatus() == com.razorpay.recovery.receivable.Receivable.PromiseStatus.PROMISED
-                    || receivable.getPromiseStatus() == com.razorpay.recovery.receivable.Receivable.PromiseStatus.BROKEN) {
-                receivable.setPromiseStatus(com.razorpay.recovery.receivable.Receivable.PromiseStatus.KEPT);
+            if (receivable.getPromiseStatus() == Receivable.PromiseStatus.PROMISED
+                    || receivable.getPromiseStatus() == Receivable.PromiseStatus.BROKEN) {
+                receivable.setPromiseStatus(Receivable.PromiseStatus.KEPT);
             }
         } else {
             receivable.setReminderCount(receivable.getReminderCount() + 1);
@@ -725,20 +556,68 @@ public class RecoveryOrchestratorService {
     // Shared helpers
     // ═══════════════════════════════════════════════════════════════
 
-    /** Persist a cooldown-skip attempt so the ledger shows why an item was skipped. */
+    /** Why an item was skipped — recorded honestly on the ledger instead of as a scheduled retry. */
+    public enum SkipReason { IDEMPOTENCY, COOLDOWN }
+
+    /** Build a skip attempt (cooldown/idempotency). The caller persists it like any other attempt. */
     private RecoveryAttempt persistSkip(Transaction tx, CheckoutSession session, Receivable receivable,
-                                        String batchId, long minutesSinceLast, DecisionTrace trace) {
+                                        String batchId, DecisionTrace trace, SkipReason reason, String detail) {
         RecoveryAttempt skip = new RecoveryAttempt();
         if (tx != null) { skip.setSourceType(SourceType.PAYMENT); skip.setTransaction(tx); }
         else if (session != null) { skip.setSourceType(SourceType.CHECKOUT); skip.setCheckoutSession(session); }
         else if (receivable != null) { skip.setSourceType(SourceType.RECEIVABLE); skip.setReceivable(receivable); }
-        skip.setActionTaken(RecoveryAction.RETRY_SCHEDULED);
-        skip.setReasoning("Skipped: cooldown not elapsed (" + minutesSinceLast + "min / " + getCooldownMinutes() + "min).");
+        skip.setActionTaken(RecoveryAction.NO_ACTION);
+        skip.setReasoning(reason + ": " + detail);
         skip.setConfidence(0.0);
-        skip.setOutcome(AttemptOutcome.PENDING);
+        skip.setOutcome(AttemptOutcome.SKIPPED);
         skip.setExecutedAt(LocalDateTime.now());
         skip.setBatchId(batchId);
         skip.setDecisionTrace(trace);
-        return attemptRepository.save(skip);
+        skip.setCustomerNotified(false);
+        return skip;
+    }
+
+    /** Build a control-group attempt: NO_ACTION with natural (un-intervened) outcome, for uplift math. */
+    private RecoveryAttempt buildControlAttempt(SourceType sourceType, Transaction tx, CheckoutSession session,
+                                                Receivable receivable, String batchId, UpliftSegment segment,
+                                                boolean naturalSuccess, DecisionTrace trace, String reasoning) {
+        RecoveryAttempt attempt = new RecoveryAttempt();
+        attempt.setSourceType(sourceType);
+        attempt.setTransaction(tx);
+        attempt.setCheckoutSession(session);
+        attempt.setReceivable(receivable);
+        attempt.setActionTaken(RecoveryAction.NO_ACTION);
+        attempt.setReasoning(reasoning);
+        attempt.setConfidence(1.0);
+        attempt.setOutcome(naturalSuccess ? AttemptOutcome.SUCCESS : AttemptOutcome.FAILED);
+        attempt.setAmountRecovered(naturalSuccess ? controlAmount(tx, session, receivable) : BigDecimal.ZERO);
+        attempt.setBatchId(batchId);
+        attempt.setExecutedAt(LocalDateTime.now());
+        attempt.setUpliftSegment(segment);
+        attempt.setDecisionTrace(trace);
+        attempt.setCustomerNotified(false);
+        return attempt;
+    }
+
+    private BigDecimal controlAmount(Transaction tx, CheckoutSession session, Receivable receivable) {
+        if (tx != null) return tx.getAmount();
+        if (session != null) return session.getCartAmount();
+        if (receivable != null) return receivable.getInvoiceAmount();
+        return BigDecimal.ZERO;
+    }
+
+    /** Record an audit event for a batch (never throws — audit failures don't break the pipeline). */
+    private void audit(String batchId, AuditEvent.Actor actor, AuditEvent.EventType type,
+                       String entityType, String entityId, String reason) {
+        auditService.recordForBatch(batchId, actor, type, entityType, entityId, reason);
+    }
+
+    private void auditExecution(String batchId, String entityType, String entityId,
+                                String action, boolean success, BigDecimal amount) {
+        audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.RECOVERY_ATTEMPT_EXECUTED,
+                entityType, entityId, "Action " + action + " executed");
+        audit(batchId, AuditEvent.Actor.SYSTEM,
+                success ? AuditEvent.EventType.RECOVERY_ATTEMPT_SUCCEEDED : AuditEvent.EventType.RECOVERY_ATTEMPT_FAILED,
+                entityType, entityId, "Action " + action + (success ? " succeeded (recovered " + amount + ")" : " failed"));
     }
 }

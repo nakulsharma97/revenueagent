@@ -16,7 +16,8 @@ import java.util.Random;
 @Service
 public class MockNotificationService {
 
-    private final Random random = new Random();
+    /** Fixed seed → identical outcomes on every run for a given input, so demo metrics are reproducible. */
+    private final Random random = new Random(42);
 
     // ₹0.35 per SMS: bulk SMS rates on Indian providers (MSG91, Gupshup) for
     // transactional OTP-tier messages. Promotional SMS would be ₹0.15-0.20
@@ -45,6 +46,12 @@ public class MockNotificationService {
     // estimate — industry benchmarks for Indian e-commerce range 20-35%.
     public boolean sendCheckoutReminder(CheckoutSession session) {
         return random.nextDouble() < 0.25;
+    }
+
+    // Abandoned-cart payment link: distinct from a plain reminder — a direct
+    // pay link converts like a dunning link (30%), higher than a generic nudge.
+    public boolean sendCheckoutPaymentLink(CheckoutSession session) {
+        return random.nextDouble() < 0.30;
     }
 
     // Checkout discount: higher base (35%) because cart abandoners have already

@@ -44,10 +44,17 @@ Click **Overview** in the sidebar, then click the **Run Batch ▶** button.
 *(Screen: ledger tape scrolls, stat cards update, charts repopulate.
 Wait for the batch to finish — usually 2-4 seconds.)*
 
-After it finishes:
+After it finishes, read the live numbers off the screen — recovery rate,
+revenue recovered, and the Agent vs. Baseline chart:
 
-> "49.7% recovery rate. ₹1.20 crore net recovered versus a ₹48 lakh
-> naive baseline — that's the headline number."
+> "Recovery rate [read the % off the stat card], net recovered
+> [read off the card] versus the naive baseline [read off the chart] —
+> that's the headline number."
+
+> Note: the seeded dataset and mock outcomes are deterministic (fixed
+> Random seed 42), but the exact figures are computed live from the actual
+> batch, so always read them off the dashboard instead of scripting a
+> specific number.
 
 ---
 
@@ -70,8 +77,8 @@ the `llmDriven` / `requiresHumanSignoff` flags.)*
 Scroll up to the **Net Recovered vs Baseline** chart.
 
 > "This chart answers the brief: measured money recovered, compared to doing
-> nothing smart. ₹71 lakh more than a naive retry — on the same batch,
-> same probability model. That's the number that proves this works."
+> nothing smart. [Read the agent-vs-baseline delta off the chart] — on the
+> same batch, same probability model. That's the number that proves this works."
 
 *(Screen: end on this chart. Hold for 2-3 seconds, then stop recording.)*
 

@@ -1,25 +1,12 @@
 package com.razorpay.recovery.recovery.execution;
 
-import java.math.BigDecimal;
-
-/**
- * Result returned by RecoveryActionExecutor.execute().
- * Encapsulates whether the action succeeded, how much was recovered,
- * and the intervention cost incurred.
+/*
+ * REMOVED — dead code. The pluggable-executor design (RecoveryActionExecutor,
+ * RecoveryContext, ExecutionResult) was never wired into the pipeline; execution
+ * lives in RecoveryOrchestratorService's exhaustive switch statements backed by
+ * MockPaymentGatewayService / MockNotificationService.
+ *
+ * This file is a comment-only placeholder because shell-based file deletion is
+ * unavailable in the current workspace. Delete this entire directory:
+ *     rm -rf backend/src/main/java/com/razorpay/recovery/recovery/execution
  */
-public record ExecutionResult(
-    boolean success,
-    BigDecimal amountRecovered,
-    BigDecimal interventionCost,
-    String message
-) {
-    /** Factory for a successful execution */
-    public static ExecutionResult success(BigDecimal amountRecovered, BigDecimal cost) {
-        return new ExecutionResult(true, amountRecovered, cost, "Action executed successfully");
-    }
-
-    /** Factory for a failed execution */
-    public static ExecutionResult failure(String reason) {
-        return new ExecutionResult(false, BigDecimal.ZERO, BigDecimal.ZERO, reason);
-    }
-}

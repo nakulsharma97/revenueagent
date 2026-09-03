@@ -28,6 +28,14 @@ public class RazorpayWebhookPayload {
     @JsonProperty("event")
     public String event;
 
+    /**
+     * Razorpay's webhook event ID (stable per delivery attempt, when present).
+     * Used as the idempotency key; when absent, the controller derives a
+     * deterministic key from the payment ID instead.
+     */
+    @JsonProperty("event_id")
+    public String eventId;
+
     /** Which entities are included (e.g. ["payment"]). */
     @JsonProperty("contains")
     public List<String> contains;

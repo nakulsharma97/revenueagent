@@ -13,7 +13,7 @@ export default function LedgerTape({ attempts }) {
         {doubled.map((a, i) => (
           <span
             key={i}
-            className={`ledger-tape__item ${a.outcome === 'SUCCESS' ? 'is-win' : a.outcome === 'FAILED' ? 'is-loss' : a.outcome === 'PENDING' ? 'is-pending' : ''}`}
+            className={`ledger-tape__item ${a.outcome === 'SUCCESS' ? 'is-win' : a.outcome === 'FAILED' ? 'is-loss' : a.outcome === 'SKIPPED' || a.outcome === 'PENDING' ? 'is-pending' : ''}`}
             onMouseEnter={() => !a.placeholder && setHoveredId(a.id || i)}
             onMouseLeave={() => setHoveredId(null)}
             style={{ position: 'relative' }}
@@ -23,10 +23,10 @@ export default function LedgerTape({ attempts }) {
             ) : (
               <>
                 TXN#{String(a.transaction?.id ?? '—').padStart(4, '0')}{' '}
-                <strong>{a.actionTaken?.replaceAll('_', ' ')}</strong>{' '}
+                <strong>{a.actionTaken === 'NO_ACTION' ? 'NO ACTION' : a.actionTaken?.replaceAll('_', ' ')}</strong>{' '}
                 {a.outcome === 'SUCCESS'
                   ? `+₹${Number(a.amountRecovered).toLocaleString('en-IN')}`
-                  : a.outcome === 'PENDING'
+                  : a.outcome === 'SKIPPED' || a.outcome === 'PENDING'
                     ? 'SKIPPED'
                     : a.outcome}
                 {a.llmDriven ? ' [LLM]' : ''}

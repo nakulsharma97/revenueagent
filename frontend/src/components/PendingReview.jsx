@@ -5,11 +5,17 @@ const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8080';
 export default function PendingReview({ forceShow, onResolved }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [resolving, setResolving] = useState(null);
 
   const loadItems = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
     fetch(`${API_BASE}/api/recovery/pending-review`)
-      .then(r => r.json()).then(setItems).catch(() => setItems([])).finally(() => setLoading(false));
+      .then(r => { if (!r.ok) throw new Error(`pending-review request failed (${r.status})`); return r.json(); })
+      .then(setItems)
+      .catch(() => { setItems([]); setLoadError('Could not load pending-review items — the recovery engine may be unreachable.'); })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { loadItems(); }, [loadItems]);
@@ -36,6 +42,16 @@ export default function PendingReview({ forceShow, onResolved }) {
   if (loading) return (
     <div className="card" style={{ padding: '16px 20px', width: '100%', minWidth: 0 }}>
       <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)' }}>Fetching items that need human sign-off…</div>
+    </div>
+  );
+
+  if (loadError && !forceShow) return null;
+
+  if (loadError && forceShow) return (
+    <div className="card" style={{ width: '100%', minWidth: 0 }}>
+      <div style={{ fontFamily: 'var(--font-body)', fontSize: 15, fontWeight: 700, color: 'var(--red)', marginBottom: 4 }}>⚠ PENDING HUMAN REVIEW — UNAVAILABLE</div>
+      <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: 'var(--text-muted)' }}>{loadError} Make sure the Spring Boot backend is running on :8080, then refresh.</div>
+      <button onClick={loadItems} style={{ marginTop: 12, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '8px 18px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>Retry</button>
     </div>
   );
 

@@ -11,11 +11,12 @@ const ACTION_COLORS = {
 const OUTCOME_STYLES = {
   SUCCESS: { color: 'var(--green)', bg: 'var(--green-bg)', label: 'SUCCESS' },
   FAILED: { color: 'var(--red)', bg: 'var(--red-bg)', label: 'FAILED' },
+  SKIPPED: { color: 'var(--text-muted)', bg: 'var(--surface-hover)', label: 'SKIPPED' },
   PENDING: { color: 'var(--amber)', bg: 'var(--amber-bg)', label: 'PENDING' },
 };
 
-const ACTION_OPTIONS = ['All', 'RETRY_SILENT', 'RETRY_NOW', 'RETRY_SCHEDULED', 'SEND_PAYMENT_LINK', 'OFFER_DISCOUNT', 'ESCALATE_TO_HUMAN', 'ABANDON', 'CHECKOUT_REMINDER', 'OFFER_PAYMENT_PLAN', 'SEND_REMINDER', 'PROMISE_FOLLOWUP'];
-const OUTCOME_OPTIONS = ['All', 'SUCCESS', 'FAILED', 'PENDING'];
+const ACTION_OPTIONS = ['All', 'RETRY_SILENT', 'RETRY_NOW', 'RETRY_SCHEDULED', 'SEND_PAYMENT_LINK', 'OFFER_DISCOUNT', 'ESCALATE_TO_HUMAN', 'ABANDON', 'CHECKOUT_REMINDER', 'OFFER_PAYMENT_PLAN', 'SEND_REMINDER', 'PROMISE_FOLLOWUP', 'NO_ACTION'];
+const OUTCOME_OPTIONS = ['All', 'SUCCESS', 'FAILED', 'SKIPPED', 'PENDING'];
 const SOURCE_OPTIONS = ['All', 'PAYMENT', 'CHECKOUT', 'RECEIVABLE'];
 
 function AttemptTableInner({ attempts, onSelectAttempt }) {

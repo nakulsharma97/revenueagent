@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.razorpay.recovery.audit.AuditEvent;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -50,13 +51,16 @@ public class RazorpayWebhookController {
     private final TransactionRepository transactionRepository;
     private final CustomerRepository customerRepository;
     private final SubscriptionRepository subscriptionRepository;
+    private final com.razorpay.recovery.audit.AuditService auditService;
 
     public RazorpayWebhookController(TransactionRepository transactionRepository,
                                       CustomerRepository customerRepository,
-                                      SubscriptionRepository subscriptionRepository) {
+                                      SubscriptionRepository subscriptionRepository,
+                                      com.razorpay.recovery.audit.AuditService auditService) {
         this.transactionRepository = transactionRepository;
         this.customerRepository = customerRepository;
         this.subscriptionRepository = subscriptionRepository;
+        this.auditService = auditService;
     }
 
     @PostMapping("/payment-failed")
@@ -79,15 +83,24 @@ public class RazorpayWebhookController {
             ));
         }
 
-        // Check for duplicate (idempotency)
+        // ── Idempotency: stable event key, checked via indexed queries (no full-table scan) ──
+        // Prefer the provider's event ID when present; otherwise derive a deterministic
+        // key from immutable webhook data (the payment ID), so duplicate deliveries of the
+        // same payment always collide on the same key and are rejected.
         String razorpayId = payment.id;
-        Optional<Transaction> existing = transactionRepository.findAll().stream()
-                .filter(tx -> razorpayId.equals(tx.getRazorpayPaymentId()))
-                .findFirst();
-        if (existing.isPresent()) {
+        String eventId = (payload.eventId != null && !payload.eventId.isBlank())
+                ? payload.eventId.trim()
+                : "pay_webhook_" + razorpayId;
+
+        Optional<Transaction> existing = transactionRepository.findByRazorpayPaymentId(razorpayId);
+        if (existing.isPresent() || transactionRepository.existsByEventId(eventId)) {
+            auditService.record(AuditEvent.of(
+                    AuditEvent.Actor.SYSTEM, AuditEvent.EventType.DUPLICATE_EVENT_DETECTED,
+                    "TRANSACTION", existing.map(tx -> String.valueOf(tx.getId())).orElse(eventId),
+                    "Duplicate webhook delivery for payment " + payment.id));
             return ResponseEntity.ok(Map.of(
                     "status", "duplicate",
-                    "transactionId", existing.get().getId(),
+                    "transactionId", existing.map(tx -> tx.getId()).orElse(null),
                     "message", "Payment " + payment.id + " already ingested"
             ));
         }
@@ -114,13 +127,40 @@ public class RazorpayWebhookController {
         tx.setRetryCount(0);
         tx.setCreatedAt(LocalDateTime.now());
         tx.setRazorpayPaymentId(payment.id);
+        // Idempotency key — DB unique constraint on eventId is the guarantee-of-last-resort
+        // against duplicate processing across batches.
+        tx.setEventId(eventId);
 
-        Transaction saved = transactionRepository.save(tx);
+        Transaction saved;
+        try {
+            saved = transactionRepository.save(tx);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // Two deliveries raced past the pre-check — the UNIQUE constraint on eventId
+            // is the guarantee-of-last-resort. Treat as a duplicate, not an error.
+            auditService.record(AuditEvent.of(
+                    AuditEvent.Actor.SYSTEM, AuditEvent.EventType.DUPLICATE_EVENT_DETECTED,
+                    "TRANSACTION", eventId,
+                    "Duplicate webhook delivery for payment " + payment.id
+                            + " rejected by eventId unique constraint"));
+            return ResponseEntity.ok(Map.of(
+                    "status", "duplicate",
+                    "transactionId", null,
+                    "message", "Payment " + payment.id + " already ingested (constraint)"
+            ));
+        }
+
+        auditService.record(AuditEvent.of(
+                AuditEvent.Actor.SYSTEM, AuditEvent.EventType.TRANSACTION_STATUS_CHANGED,
+                "TRANSACTION", String.valueOf(saved.getId()),
+                "Webhook payment.failed ingested (payment=" + payment.id + ", eventId=" + eventId
+                        + ", mapped to " + failureReason.name() + ")")
+                .withStateChange("NONE", "AT_RISK"));
 
         return ResponseEntity.ok(Map.of(
                 "status", "ingested",
                 "transactionId", saved.getId(),
                 "razorpayPaymentId", payment.id,
+                "eventId", eventId,
                 "amount", amount,
                 "failureReason", failureReason.name(),
                 "mappedFrom", Map.of(

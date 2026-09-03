@@ -1,6 +1,5 @@
 package com.razorpay.recovery.config;
 
-import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.beans.factory.annotation.Value;
@@ -82,10 +81,6 @@ public class BoundsConfig {
     }
 
     /** Apply values from a PUT request. Only non-null fields are updated. */
-    public void apply(Integer maxRetries, Integer maxDiscountPercent, BigDecimal minAmountForDiscount, Integer retryCooldownMinutes) {
-        apply(maxRetries, maxDiscountPercent, minAmountForDiscount, retryCooldownMinutes, null, null, null, null);
-    }
-
     public void apply(Integer maxRetries, Integer maxDiscountPercent, BigDecimal minAmountForDiscount, Integer retryCooldownMinutes,
                       Integer hvMaxRetries, Integer hvMaxDiscountPercent, BigDecimal hvMinAmountForDiscount, String lang) {
         if (maxRetries != null && maxRetries >= 1 && maxRetries <= 10) {

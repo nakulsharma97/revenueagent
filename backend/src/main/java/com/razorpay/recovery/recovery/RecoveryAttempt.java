@@ -113,7 +113,12 @@ public class RecoveryAttempt {
     }
 
     public enum AttemptOutcome {
-        PENDING, SUCCESS, FAILED
+        /** Awaiting execution (legacy value, no longer produced). */
+        PENDING,
+        SUCCESS,
+        FAILED,
+        /** Not executed: control-group, cooldown, or idempotency skip. */
+        SKIPPED
     }
 
     public enum SignoffStatus {

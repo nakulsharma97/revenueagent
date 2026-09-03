@@ -9,6 +9,7 @@ public record FunnelData(
         long recovered,
         long lost,
         long pendingAttempts,
+        long skippedAttempts,
         long succeededAttempts,
         long failedAttempts
 ) {
