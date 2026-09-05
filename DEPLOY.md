@@ -17,7 +17,7 @@ One-click hosted demo so judges don't need local setup.
    | `FRONTEND_ORIGIN` | `*` (update after frontend deploy — see below) |
 5. Wait for deploy to finish. Railway gives you a URL like `https://your-app.up.railway.app`.
 6. Test: visit `https://your-app.up.railway.app/api/metrics` — should return JSON.
-7. **Optional**: set `ANTHROPIC_API_KEY` and `LLM_ENABLED=true` for live LLM reasoning (heuristic fallback works without it).
+7. **Optional**: set `ANTHROPIC_API_KEY` and `LLM_ENABLED=true` to enable the LLM *explanation* layer. The deterministic Next-Best-Action engine always chooses the action, so the app runs identically with or without a key.
 
 ---
 
@@ -89,4 +89,4 @@ npm run dev
 # → http://localhost:5173
 ```
 
-No environment variables needed — defaults to H2 in-memory, heuristic fallback, CORS `*`.
+No environment variables needed — defaults to H2 in-memory, engine-decided recovery (LLM explanation off), CORS `*`.

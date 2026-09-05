@@ -14,6 +14,86 @@ The system runs a **detect → diagnose → simulate → select → execute → 
 
 ## Architecture
 
+### Whole-system view
+
+```mermaid
+flowchart TD
+    subgraph UI["Frontend — React + Vite (localhost:5173)"]
+        P1["Command Center · Recovery Simulator"]
+        P2["Human Review · Action Lab"]
+        P3["Decision Ledger · Transactions · Reports · Settings"]
+    end
+
+    subgraph API["Backend API — Spring Boot (localhost:8080)"]
+        RC["RecoveryController"]
+        IC["IntelligenceController"]
+        WC["RazorpayWebhookController"]
+        OC["MetricsController · AuditController · ConfigController"]
+    end
+
+    subgraph CORE["One decision core — shared by every entry point"]
+        ORCH["RecoveryOrchestratorService"]
+        DA["DecisionAgentService"]
+        ENG["NextBestActionEngine"]
+        RULES["RulesEngine"]
+        INTEL["RecoveryIntelligenceService"]
+        SCHED["RecoveryScheduler"]
+        SEED["DataSeeder · AutoBatchRunner"]
+    end
+
+    subgraph OUT["Execution side-effects"]
+        GW["MockPaymentGatewayService"]
+        NT["MockNotificationService"]
+        AUD["AuditService"]
+        MEM["OutcomeMemoryService"]
+    end
+
+    DB[("H2 (dev) / MySQL — attempts · counterfactuals · outcomes · review · anomalies · audit")]
+
+    P1 --> RC
+    P2 --> IC
+    P3 --> OC
+    WC --> ORCH
+    RC --> ORCH
+    SCHED --> ORCH
+    SEED --> ORCH
+    ORCH --> DA --> ENG --> RULES --> INTEL
+    INTEL --> GW
+    INTEL --> NT
+    INTEL --> AUD
+    INTEL --> MEM
+    AUD --> DB
+    INTEL --> DB
+```
+
+Four layers, one decision core:
+
+1. **Frontend** — a React single-page app. All screens read the same persisted state, so the dashboard, the Decision Ledger and the Simulator can never disagree.
+2. **Backend API** — thin Spring controllers over the domain; responses are DTOs (OSIV is off), and the SSE endpoint streams batch progress live.
+3. **One decision core** — every entry point (manual batch, SSE batch, scheduler, startup auto-run, webhook) funnels into `RecoveryOrchestratorService.runBatchWithCallback`, so no code path can produce a different decision for the same entity.
+4. **Side-effects & storage** — a decision executes against pluggable payment/notification adapters (mocks by default), is audited, recorded as an outcome, and remembered by the Outcome Memory.
+
+### Module map (backend `com.razorpay.recovery`)
+
+| Package | Responsibility | Key classes |
+|---|---|---|
+| `api` | DTO layer — OSIV-off JSON mapping, query assembly | `TransactionDto` · `AttemptDto` · `ReceivableDto` · `RecoveryApiService` |
+| `recovery` | the bounded core: batch orchestration, decision seam, rules, attempt ledger | `RecoveryOrchestratorService` · `DecisionAgentService` · `RulesEngine` · `RecoveryController` · `RecoveryAttempt` · `UpliftSegmentationService` |
+| `recovery/mocks` | pluggable gateway/notification adapters (deterministic in demo) | `MockPaymentGatewayService` · `MockNotificationService` |
+| `intelligence` | the decision intelligence: engine, uplift model, fatigue, state, confidence, value optimizer, anomalies, experiments; persisted decision artefacts | `NextBestActionEngine` · `UpliftScoringService` · `RecoveryFatigueService` · `CustomerStateService` · `DecisionConfidenceService` · `RecoveryValueOptimizer` · `AnomalyDetectionService` · `RecoveryIntelligenceService` · `OutcomeMemoryService` · `CounterfactualDecision` · `HumanReviewCase` |
+| `customer` · `subscription` · `transaction` · `checkout` · `receivable` | domain entities for the three revenue sources + customer profile | `Customer` · `Subscription` · `Transaction` · `CheckoutSession` · `Receivable` |
+| `scheduler` | scheduled batch with an in-flight collision guard | `RecoveryScheduler` |
+| `config` | runtime bounds + editor, deterministic seeding, startup auto-batch, CORS | `BoundsConfig` · `ConfigController` · `DataSeeder` · `AutoBatchRunner` · `WebConfig` |
+| `metrics` | live / held-out / control-group metrics, funnel, action ROI, uplift | `MetricsService` · `MetricsController` |
+| `audit` | append-only pipeline trail (ingest, evaluate, decide, execute, skip, batch) | `AuditService` · `AuditEvent` · `AuditController` |
+
+### Frontend layout
+
+- **Entry** — `frontend/src/main.jsx` → `App.jsx` (left-rail navigation across the 11 screens, top header with Run Batch ▶ / pending-review badge / live “last updated”, main content area).
+- **Data layer** — `frontend/src/api.js` maps every REST endpoint and provides the SSE reader (`runBatchStream`) that streams each attempt and the final `{processed, skipped, failed}` counts.
+- **Views** — stat grids and charts (`StatCard`, `RecoveryChart`, `FunnelChart`, `ActionBreakdownChart`), tables + row drill-down (`AttemptTable`, `TransactionModal`), and the decision-specific screens (`RecoverySimulator`, `HumanReview`, `ActionLab`, `LedgerTape`, `PendingReview`, `BoundsRegister`).
+- **State** — held in `App.jsx` (metrics, command-center aggregates, attempts, review queue, batch progress). Attempts and transactions are re-pulled on every load, so the ledger survives a page refresh.
+
 ### One pipeline, every entry point
 
 The manual batch (`POST /api/recovery/run-batch`), the SSE streaming batch, the scheduler, the startup auto-run and webhook-ingested items all funnel into the **same processing core** — `RecoveryOrchestratorService.runBatchWithCallback` — so no code path can ever produce a different decision for the same entity. The intelligence engine is a single Spring-injected singleton shared by every caller (no manual `new` anywhere in production code).
@@ -76,22 +156,22 @@ PAYMENT / CHECKOUT / RECEIVABLE
 | Recovery Timeline | `GET /api/intelligence/timeline` | every attempt on one entity, oldest → newest |
 
 
-| What it proves | File |
+### The bounded recovery core
+
+| Layer | File |
 |---|---|
-| Bounded workflow (hard limits enforced before any engine output) | `backend/.../recovery/RulesEngine.java` |
-| Decision layer: engine-driven action + optional LLM explanation | `backend/.../recovery/DecisionAgentService.java` |
-| Engine wiring | `intelligence/*` are Spring beans | one `NextBestActionEngine` singleton is constructor-injected everywhere — no manual `new` in production code |
-| Decision provenance | `RecoveryAttempt.decisionSource` / `.engineVersion` | every attempt records `RECOVERY_INTELLIGENCE_ENGINE` + `RECOVERY_INTELLIGENCE_V1` (or `MANUAL_HUMAN_OVERRIDE` after a review override) — proves which engine made the call |
-| End-to-end loop across all 3 revenue sources | `backend/.../recovery/RecoveryOrchestratorService.java` |
-| Honest metrics (recovered − intervention cost) | `backend/.../metrics/MetricsService.java` |
-| Realistic synthetic batch (320 items auto-seeded on startup) | `backend/.../config/DataSeeder.java` |
-| Human sign-off queue | `backend/.../recovery/RecoveryController.java` (`GET /pending-review`) |
-| Live bounds editor (runtime config changes) | `backend/.../config/ConfigController.java` (`PUT /config/bounds`) |
-| Mutable bounds configuration | `backend/.../config/BoundsConfig.java` |
-| Silent-first recovery (RETRY_SILENT) | `RulesEngine.eligibleActions()` — first-attempt retryable failures use background retry only |
-| Customer segment-aware bounds | `BoundsConfig.boundsFor(segment)` — HIGH_VALUE gets wider limits |
-| DSO metric (B2B KPI) | `MetricsService.currentMetrics()` — Days Sales Outstanding for receivables |
-| Promise-to-pay tracker | `Receivable.promiseStatus` — tracks kept/broken promises |
+| Hard policy bounds (retries · cooldown · discount ceilings · sign-off triggers) | `recovery/RulesEngine.java` |
+| Decision seam: engine decides, optional LLM explains | `recovery/DecisionAgentService.java` |
+| Single batch core (REST · SSE · scheduler · startup · webhook) | `recovery/RecoveryOrchestratorService.java` |
+| Engine wiring — one injected singleton, no manual `new` anywhere | `intelligence/*` (all Spring beans) |
+| Decision provenance | `RecoveryAttempt.decisionSource` / `.engineVersion` — `RECOVERY_INTELLIGENCE_ENGINE` + `RECOVERY_INTELLIGENCE_V1` (or `MANUAL_HUMAN_OVERRIDE` after a human review override) |
+| Honest metrics (recovered − intervention cost, held-out scope) | `metrics/MetricsService.java` |
+| Deterministic synthetic dataset (320 items, fixed seed) | `config/DataSeeder.java` |
+| Human sign-off queue | `RecoveryController` (`GET /api/recovery/pending-review`) |
+| Live bounds editor (runtime, no restart) | `config/ConfigController.java` (`PUT /api/config/bounds`) · `config/BoundsConfig.java` |
+| Silent-first recovery (`RETRY_SILENT` on first retryable failure) | `RulesEngine.eligibleActions()` |
+| Segment-aware bounds (HIGH_VALUE: 5 retries · 25% ceiling) | `BoundsConfig.boundsFor(segment)` |
+| B2B KPIs — DSO and promise-to-pay tracking | `metrics/MetricsService` · `Receivable.promiseStatus` |
 
 ## Key design principles (what makes it different)
 
@@ -178,7 +258,7 @@ npm run dev
 
 Runs on `http://localhost:5173`. Automatically connects to the backend at `localhost:8080` — no `.env` file needed for local dev.
 
-### Optional: Enable live LLM reasoning
+### Optional: LLM explanation layer (Claude)
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -187,6 +267,14 @@ cd backend && mvn spring-boot:run
 ```
 
 Without these the deterministic engine is still the decision-maker; the LLM explanation layer is simply skipped (`llmDriven=false`) — the demo never breaks and nothing is ever faked.
+
+## Tests
+
+All backend tests pass — **104 tests, 0 failures** via `mvn -f backend/pom.xml clean test` — and GitHub Actions runs that plus the frontend build on every push to `main`.
+
+- **Unit** — `NextBestActionEngineTest` (net-value ranking beats headline success rate, discount-tier ceilings per segment, fatigue suppression, confidence policy, determinism), `RulesEngineTest`, `DecisionAgentServiceTest`, `UpliftSegmentationServiceTest`, `RecoveryIntelligenceServiceTest`, `OutcomeMemoryServiceTest`, `MetricsServiceTest`, `IdempotencyTest`, `LiveBoundsEditorTest`.
+- **Integration** (`@SpringBootTest` — `RecoveryPipelineIntegrationTest`) — transactions serialise with OSIV disabled (DTO mapping, no lazy-loading exceptions), HIGH_VALUE vs STANDARD retry limits enforced by the real batch, duplicate webhooks rejected by both the API and the DB `eventId` unique constraint, persisted attempts survive a fresh request newest-first, audit lifecycle events fire, the scheduler skips gracefully when a batch is already running, SSE `total` equals the real worklist size, and a real batch run stamps engine provenance and persists counterfactual rows.
+- **Frontend** — `npm run build` (Vite) stays clean; the dev server at `localhost:5173` talks to the backend at `localhost:8080`.
 
 ## Results — how to read the demo numbers
 
@@ -282,4 +370,6 @@ The `RulesEngine` enforces this in code: SURE_THING and LOST_CAUSE entities have
 
 **Full project brief:** See `PROJECT_BRIEF.md` for scope decisions, design rationale, and the complete problem breakdown.
 
-**5-minute screening pitch:** See `docs/PITCH_5MIN.md` — timed talking points and the live-demo click path for judges.
+**5-minute screening pitch:** See `docs/PITCH_5MIN.md` — a timed, word-for-word speech with the live-demo click path for judges.
+
+**Detailed demo walkthrough:** See `docs/DEMO_SCRIPT.md`.
