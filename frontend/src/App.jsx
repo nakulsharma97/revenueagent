@@ -45,10 +45,10 @@ function PageHeader({ title, subtitle, right }) {
 }
 
 /* Reusable summary stat block */
-function SummaryStat({ label, value, color }) {
+function SummaryStat({ label, value, color, labelColor }) {
   return (
     <div style={{ flex: 1, minWidth: 0, padding: '14px 18px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
-      <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: labelColor || 'var(--text-muted)', marginBottom: 6 }}>{label}</div>
       <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700, color: color || 'var(--text)', lineHeight: 1.2 }}>{value}</div>
     </div>
   );
@@ -267,24 +267,16 @@ export default function App() {
   // ═══ 1. OVERVIEW ═══
   function renderOverview() {
     return (<>
-      {/* ROW 0: Recovery Intelligence strip */}
+      {/* ROW 0: Recovery Intelligence hero — responsive metric grid (even gutters, no orphaned cells) */}
       {commandCenter && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 16, padding: '12px 16px', background: 'var(--surface)', border: '1px solid var(--gold-border)', borderRadius: 'var(--radius-sm)' }}>
-          <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--gold)', marginBottom: 4 }}>Revenue at Risk</div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 800, color: 'var(--text)' }}>{fmt(commandCenter.revenueAtRisk)}</div>
-          {[
-            ['AI DECISIONS TODAY', commandCenter.aiDecisionsToday, 'var(--gold)'],
-            ['HUMAN ESCALATIONS', commandCenter.pendingHumanEscalations, 'var(--red)'],
-            ['OPEN ANOMALIES', commandCenter.openAnomalies, 'var(--amber)'],
-            ['OUTCOMES RECORDED', commandCenter.outcomesRecorded, 'var(--green)'],
-            ['ACTIVE EXPERIMENTS', commandCenter.activeExperiments, 'var(--text-secondary)'],
-            ['FATIGUE ALERTS', commandCenter.fatigueAlerts, 'var(--amber)'],
-          ].map(([l, v, c]) => (
-            <div key={l}>
-              <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 4 }}>{l}</div>
-              <div style={{ fontFamily: 'var(--font-mono)', fontSize: 20, fontWeight: 700, color: c }}>{v}</div>
-            </div>
-          ))}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 16 }}>
+          <SummaryStat label="Revenue at Risk" value={fmt(commandCenter.revenueAtRisk)} labelColor="var(--gold)" />
+          <SummaryStat label="AI Decisions Today" value={commandCenter.aiDecisionsToday} color="var(--gold)" />
+          <SummaryStat label="Human Escalations" value={commandCenter.pendingHumanEscalations} color="var(--red)" />
+          <SummaryStat label="Open Anomalies" value={commandCenter.openAnomalies} color="var(--amber)" />
+          <SummaryStat label="Outcomes Recorded" value={commandCenter.outcomesRecorded} color="var(--green)" />
+          <SummaryStat label="Active Experiments" value={commandCenter.activeExperiments} color="var(--text-secondary)" />
+          <SummaryStat label="Fatigue Alerts" value={commandCenter.fatigueAlerts} color="var(--amber)" />
         </div>
       )}
 
