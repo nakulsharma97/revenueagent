@@ -22,7 +22,7 @@ function CustomTooltip({ active, payload }) {
 function RecoveryChartInner({ netRecovered, baseline }) {
   const data = [
     { name: 'Naive retry-once baseline', value: Math.max(baseline, 1000), key: 'baseline', displayValue: baseline },
-    { name: 'Agent (rules + LLM)', value: Math.max(netRecovered, 1000), key: 'agent', displayValue: netRecovered },
+    { name: 'Recovery Intelligence Engine', value: Math.max(netRecovered, 1000), key: 'agent', displayValue: netRecovered },
   ];
   const improvement = netRecovered - baseline;
   const improvementPct = baseline > 0 ? ((improvement / baseline) * 100).toFixed(1) : 0;

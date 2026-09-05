@@ -17,7 +17,7 @@ export default function BoundsRegister({ expanded }) {
         </div>
         <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)', textAlign: 'right', flexShrink: 0 }}>
           <div>Enforced in plain Java</div>
-          <div style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>before any LLM output executes</div>
+          <div style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>before any action executes</div>
         </div>
       </div>
       <div style={{ overflowX: 'auto' }}>

@@ -105,6 +105,8 @@ export default function App() {
   const [boundsConfig, setBoundsConfig] = useState(null);
   const [settingsLocal, setSettingsLocal] = useState({});
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState(null);
+  const [settingsSaved, setSettingsSaved] = useState(false);
   const [funnelData, setFunnelData] = useState(null);
   const [actionData, setActionData] = useState([]);
   const [efficiencyData, setEfficiencyData] = useState([]);
@@ -118,10 +120,17 @@ export default function App() {
   useEffect(() => { if (boundsConfig) setSettingsLocal(boundsConfig); }, [boundsConfig]);
 
   async function saveSettings() {
-    setSettingsSaving(true);
+    setSettingsSaving(true); setSettingsError(null); setSettingsSaved(false);
     try {
       const res = await fetch(`${API_BASE}/api/config/bounds`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settingsLocal) });
-      if (res.ok) { const u = await res.json(); setBoundsConfig(u); setSettingsLocal(u); }
+      if (!res.ok) {
+        let msg = `Save failed (HTTP ${res.status})`;
+        try { const err = await res.json(); if (err && err.message) msg = err.message; else if (err && err.error) msg = err.error; } catch (_) {}
+        throw new Error(msg);
+      }
+      const u = await res.json(); setBoundsConfig(u); setSettingsLocal(u); setSettingsSaved(true);
+    } catch (e) {
+      setSettingsError(e.message || 'Could not save bounds — is the backend running?');
     } finally { setSettingsSaving(false); }
   }
 
@@ -332,7 +341,7 @@ export default function App() {
   // ═══ 2. BOUND REGISTER ═══
   function renderBoundRegister() {
     return (<>
-      <PageHeader title="Bound Register" subtitle="Non-negotiable constraints enforced by the RulesEngine before any LLM output executes." />
+      <PageHeader title="Bound Register" subtitle="Non-negotiable constraints enforced by the RulesEngine before any action executes." />
       <div style={{ marginBottom: 16 }}><BoundsRegister expanded /></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
         <SummaryStat label="MAX RETRIES" value={boundsConfig?.maxRetries ?? 3} color="var(--gold)" />
@@ -796,21 +805,13 @@ export default function App() {
             </div>
           )}
 
-          {/* Language toggle */}
-          <div style={{ marginTop: 16, padding: '14px 16px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
-            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: 8 }}>Customer Message Language</div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {[{ val: 'en', label: 'English' }, { val: 'hinglish', label: 'Hinglish' }].map(opt => (
-                <button key={opt.val} onClick={() => setSettingsLocal(p => ({ ...p, language: opt.val }))}
-                  style={{ flex: 1, padding: '10px 16px', borderRadius: 'var(--radius-sm)', border: '1px solid', borderColor: settingsLocal.language === opt.val ? 'var(--gold)' : 'var(--border)', background: settingsLocal.language === opt.val ? 'var(--gold-bg)' : 'var(--surface)', color: settingsLocal.language === opt.val ? 'var(--gold)' : 'var(--text-secondary)', fontFamily: 'var(--font-body)', fontWeight: settingsLocal.language === opt.val ? 600 : 400, fontSize: 13, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
-                >{opt.label}</button>
-              ))}
-            </div>
-            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>When set to Hinglish, the agent generates natural Hindi-English mix SMS/email messages for customers (e.g. "Aapka payment fail ho gaya tha, yahan se dubara try kar sakte hain").</div>
+          <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button onClick={saveSettings} disabled={settingsSaving} style={{ background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 28px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 13, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
+              onMouseEnter={e => e.currentTarget.style.background = 'var(--gold-bright)'} onMouseLeave={e => e.currentTarget.style.background = 'var(--gold)'}
+            >{settingsSaving ? 'Saving…' : 'Save Configuration'}</button>
+            {settingsSaved && !settingsError && <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--green)' }}>✓ Saved — bounds updated.</span>}
+            {settingsError && <span style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--red)' }}>⚠ {settingsError}</span>}
           </div>
-          <button onClick={saveSettings} disabled={settingsSaving} style={{ marginTop: 16, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '10px 28px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 13, cursor: 'pointer', transition: 'all var(--transition-fast)' }}
-            onMouseEnter={e => e.currentTarget.style.background = 'var(--gold-bright)'} onMouseLeave={e => e.currentTarget.style.background = 'var(--gold)'}
-          >{settingsSaving ? 'Saving…' : 'Save Configuration'}</button>
         </div>
         {/* Right: System Status + Batch History */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
