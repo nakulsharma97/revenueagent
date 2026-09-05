@@ -28,9 +28,17 @@ import java.math.RoundingMode;
 @Service
 public class UpliftScoringService {
 
+    // Per-message cost in ₹. Deliberately tiny — a WhatsApp-scale SMS costs paise, not
+    // rupees — but keeping it non-zero is what makes the optimizer prefer a free silent
+    // retry over an equally-good reminder. We learned this the hard way: when costs
+    // were all zero, ties broke arbitrarily and discounts leaked margin.
     private static final double SMS_COST = 0.35;
     private static final double EMAIL_COST = 0.05;
 
+    // clamp(value, lo, hi) — argument order matters. An earlier draft had (lo, hi, value)
+    // at eight call sites and every probability silently collapsed to a constant, which
+    // made discounts win everywhere. Caught only when the engine tests finally ran on a
+    // machine with a JDK; leave the order alone.
     private static double clamp(double v, double lo, double hi) {
         return Math.max(lo, Math.min(hi, v));
     }

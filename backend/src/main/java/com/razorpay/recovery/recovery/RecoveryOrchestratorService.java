@@ -151,6 +151,7 @@ public class RecoveryOrchestratorService {
 
             List<RecoveryAttempt> all = new ArrayList<>();
 
+            // Revenue by source for the Command Center strip.
             // ── Payment failures (subscription dunning) ──
             for (Transaction tx : transactionRepository.findByStatusIn(
                     List.of(TransactionStatus.AT_RISK, TransactionStatus.IN_RECOVERY))) {
@@ -201,15 +202,18 @@ public class RecoveryOrchestratorService {
         onAttempt.accept(attempt);
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // Process one payment failure (canonical, no individual save — caller persists)
-    // ═══════════════════════════════════════════════════════════════
+    // One payment failure, start to finish. The caller persists — this method only
+    // builds the attempt, so a crash mid-pipeline never leaves a half-written row.
+    // (Earlier versions saved inside this method and a batch failure left orphaned
+    // attempts whose outcomes were never recorded.)
 
     private RecoveryAttempt processPaymentNoSave(Transaction tx, String batchId, Set<String> alreadyRecoveredEvents) {
         DecisionTrace trace = new DecisionTrace();
         trace.add("DETECTION", "Transaction TX#" + tx.getId() + " flagged as AT_RISK (amount=" + tx.getAmount() + ", failureReason=" + tx.getFailureReason() + ")");
 
-        // ── Control group: no intervention, just monitor natural recovery ──
+        // Control group: we deliberately do nothing and still measure — the mock gateway
+        // runs the same probability model with zero intervention. That "would they have
+        // paid anyway?" number is what makes our uplift claims honest instead of vibes.
         if (tx.isControlGroup()) {
             trace.add("CONTROL_GROUP", "Entity is in control group — no agent intervention. Monitoring natural recovery.");
             UpliftSegment segment = upliftService.classify(tx);
@@ -224,7 +228,8 @@ public class RecoveryOrchestratorService {
                     "Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
         }
 
-        // ── Idempotency guard: skip if already successfully recovered ──
+        // Idempotency: a webhook redelivery for an already-recovered event must be a
+        // no-op, or we'd happily charge the customer twice and call it "recovery".
         if (tx.getEventId() != null && alreadyRecoveredEvents.contains(tx.getEventId())) {
             trace.add("IDEMPOTENCY_SKIP", "EventId=" + tx.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
             audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.RECOVERY_ATTEMPT_IDEMPOTENT_SKIP,
@@ -233,7 +238,8 @@ public class RecoveryOrchestratorService {
                     "eventId=" + tx.getEventId() + " already has a SUCCESS recovery — skipped to prevent double-count");
         }
 
-        // ── Cooldown guard ──
+        // Cooldown: retries decay sharply, so hammering inside the window buys nothing
+        // and reads as desperate. Wait it out.
         if (tx.getLastAttemptAt() != null) {
             long minSince = Duration.between(tx.getLastAttemptAt(), LocalDateTime.now()).toMinutes();
             if (minSince < getCooldownMinutes()) {
@@ -245,11 +251,12 @@ public class RecoveryOrchestratorService {
             }
         }
 
-        // ── Classify uplift segment ──
+        // Which uplift segment is this customer in? Decides whether intervening even helps.
         UpliftSegment segment = upliftService.classify(tx);
         trace.add("UPLIFT_CLASSIFY", "Segment: " + segment + " (reliability=" + (tx.getSubscription() != null && tx.getSubscription().getCustomer() != null ? tx.getSubscription().getCustomer().getPaymentReliabilityScore() : 0.5) + ", retryCount=" + tx.getRetryCount() + ", amount=" + tx.getAmount() + ")");
 
-        // ── Segment-aware decision (HIGH_VALUE gets wider bounds) ──
+        // Segment-aware decision — HIGH_VALUE gets wider retry/discount bounds on purpose:
+        // more revenue at stake justifies more autonomy, not less.
         Customer.CustomerSegment customerSegment = decisionAgentService.segmentOf(tx);
         int segmentMaxRetries = boundsConfig.boundsFor(customerSegment).maxRetries();
         DecisionResult result = decisionAgentService.decideWithMeta(tx, customerSegment, trace);
@@ -258,7 +265,8 @@ public class RecoveryOrchestratorService {
                 "TRANSACTION", String.valueOf(tx.getId()),
                 "Decision: " + decision.action() + " (confidence " + decision.confidence() + ", llmDriven=" + result.llmDriven() + ")");
 
-        // ── Apply uplift-segment filter to eligible actions ──
+        // The engine picked from the unfiltered set; if the uplift segment has since
+        // narrowed it, fall back to the best remaining action rather than acting against policy.
         List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx, customerSegment);
         rulesEngine.filterByUpliftSegment(eligible, segment);
         boolean upliftFiltered = false;
@@ -348,15 +356,14 @@ public class RecoveryOrchestratorService {
         tx.setLastAttemptAt(LocalDateTime.now());
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // Process one checkout abandonment (canonical — the caller persists)
-    // ═══════════════════════════════════════════════════════════════
+    // Process one checkout abandonment (caller persists, same contract as payments)
+    // ----------------------------------------------------------------------------
 
     private RecoveryAttempt processCheckoutNoSave(CheckoutSession session, String batchId, Set<String> alreadyRecoveredEvents) {
         DecisionTrace trace = new DecisionTrace();
         trace.add("DETECTION", "CheckoutSession#" + session.getId() + " flagged as ABANDONED (amount=" + session.getCartAmount() + ", reason=" + session.getAbandonmentReason() + ")");
 
-        // ── Control group: no intervention ──
+        // Control group: measure, don't touch (see processPaymentNoSave — same counterfactual logic).
         if (session.isControlGroup()) {
             trace.add("CONTROL_GROUP", "Entity is in control group — no agent intervention.");
             UpliftSegment segment = upliftService.classify(session);
@@ -371,7 +378,7 @@ public class RecoveryOrchestratorService {
                     "Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
         }
 
-        // ── Idempotency guard ──
+        // Idempotency guard (webhook redelivery protection, same as payments).
         if (session.getEventId() != null && alreadyRecoveredEvents.contains(session.getEventId())) {
             trace.add("IDEMPOTENCY_SKIP", "EventId=" + session.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
             audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.RECOVERY_ATTEMPT_IDEMPOTENT_SKIP,
@@ -380,7 +387,7 @@ public class RecoveryOrchestratorService {
                     "eventId=" + session.getEventId() + " already has a SUCCESS recovery — skipped to prevent double-count");
         }
 
-        // ── Cooldown guard ──
+        // A cart abandoned 5 minutes ago is still warm; one from an hour ago isn't.
         if (session.getAbandonedAt() != null) {
             long minSince = Duration.between(session.getAbandonedAt(), LocalDateTime.now()).toMinutes();
             if (minSince < getCooldownMinutes()) {
@@ -468,15 +475,15 @@ public class RecoveryOrchestratorService {
         session.setAbandonedAt(LocalDateTime.now());
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // Process one overdue receivable (canonical — the caller persists)
-    // ═══════════════════════════════════════════════════════════════
+    // Process one overdue receivable
+    // -------------------------------
 
     private RecoveryAttempt processReceivableNoSave(Receivable receivable, String batchId, Set<String> alreadyRecoveredEvents) {
         DecisionTrace trace = new DecisionTrace();
         trace.add("DETECTION", "Receivable#" + receivable.getId() + " flagged as OVERDUE (amount=" + receivable.getInvoiceAmount() + ", daysOverdue=" + receivable.getDaysOverdue() + ")");
 
-        // ── Control group: no intervention ──
+        // Control group: measure, don't touch (same reasoning as payments — you can't
+        // claim lift without a counterfactual).
         if (receivable.isControlGroup()) {
             trace.add("CONTROL_GROUP", "Entity is in control group — no agent intervention.");
             UpliftSegment segment = upliftService.classify(receivable);
@@ -493,7 +500,7 @@ public class RecoveryOrchestratorService {
                     "Control group: no agent intervention applied. Natural recovery " + (naturalSuccess ? "succeeded" : "failed") + ".");
         }
 
-        // ── Idempotency guard ──
+        // Idempotency guard, as above.
         if (receivable.getEventId() != null && alreadyRecoveredEvents.contains(receivable.getEventId())) {
             trace.add("IDEMPOTENCY_SKIP", "EventId=" + receivable.getEventId() + " already has a SUCCESS recovery — skipping to prevent double-count.");
             audit(batchId, AuditEvent.Actor.SYSTEM, AuditEvent.EventType.RECOVERY_ATTEMPT_IDEMPOTENT_SKIP,
@@ -588,9 +595,8 @@ public class RecoveryOrchestratorService {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════
     // Shared helpers
-    // ═══════════════════════════════════════════════════════════════
+    // --------------
 
     /** Why an item was skipped — recorded honestly on the ledger instead of as a scheduled retry. */
     public enum SkipReason { IDEMPOTENCY, COOLDOWN }

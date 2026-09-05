@@ -7,20 +7,21 @@ export default function LedgerTape({ attempts }) {
   const trackRef = useRef(null);
   const [duration, setDuration] = useState(60);
 
-  // Only the newest entries are shown: with the full ledger (hundreds of rows) the track
-  // would be kilometres long and a fixed-duration animation would scroll far too fast.
+  // Only the newest entries are shown — with the full ledger the track ends up
+  // kilometres long and a fixed-duration animation turns into a blur. Ask me how I know.
   const entries = attempts.length > 0 ? attempts.slice(0, MAX_ENTRIES) : [{ placeholder: true }];
   const doubled = [...entries, ...entries];
+  const hasContent = attempts.length > 0 && !(entries.length === 1 && entries[0].placeholder);
 
   useEffect(() => {
     const el = trackRef.current;
-    const isPlaceholder = entries.length === 1 && entries[0].placeholder;
-    if (!el || isPlaceholder) return;
+    if (!el || !hasContent) return;
 
+    // The keyframes translate the track by exactly -50% (one copy of the doubled
+    // content). Loop time = one copy's width ÷ scroll speed, so every entry crosses
+    // the viewport at the same readable pace no matter how many rows are rendered.
+    // ResizeObserver re-measures when the track itself changes size (content or viewport).
     const measure = () => {
-      // The keyframes translate the track by exactly -50% (one copy of the doubled
-      // content). Loop time = one copy's width ÷ scroll speed, so every entry crosses
-      // the viewport at the same readable pace no matter how many rows are rendered.
       const copyWidth = el.scrollWidth / 2;
       setDuration(Math.max(MIN_LOOP_SECONDS, Math.round(copyWidth / SCROLL_PX_PER_SEC)));
     };
@@ -28,7 +29,7 @@ export default function LedgerTape({ attempts }) {
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
     if (ro) ro.observe(el);
     return () => { if (ro) ro.disconnect(); };
-  }, [attempts]);
+  }, [attempts, hasContent]);
 
   return (
     <div className="ledger-tape">

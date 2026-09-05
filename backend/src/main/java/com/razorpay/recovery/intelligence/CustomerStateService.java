@@ -19,7 +19,10 @@ public class CustomerStateService {
         if (fatigueScore >= 0.85) return RecoveryState.STOP_INTERVENTION;
         if (fatigueScore >= 0.60) return RecoveryState.RECOVERY_FATIGUE;
 
-        // 2. Very large amounts always deserve a human.
+        // 2. Very large amounts always deserve a human. ₹1L is arbitrary but deliberate:
+        // below that the engine's bounded action space caps the downside; above it a wrong
+        // discount costs more than a human's time. No automation below the confidence floor
+        // has ever been worth arguing about at this ticket size.
         if (c.amount() != null && c.amount().compareTo(HIGH_AMOUNT) >= 0) {
             return RecoveryState.HUMAN_ATTENTION_REQUIRED;
         }

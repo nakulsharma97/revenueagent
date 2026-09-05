@@ -36,9 +36,13 @@ One-click hosted demo so judges don't need local setup.
 
 ## Post-Deploy: Lock Down CORS
 
+> **⚠ REQUIRED BEFORE PRODUCTION — do not skip.** The backend's CORS config (`WebConfig`) defaults
+> `FRONTEND_ORIGIN` to `*`, which combined with credentialed requests is fine for local dev but is an
+> open CORS policy in production. Set the real frontend URL before you share the app.
+
 1. Go back to Railway → your service → **Variables**.
 2. Set `FRONTEND_ORIGIN` to your exact Vercel URL (e.g. `https://your-app.vercel.app`).
-3. This locks CORS to only your frontend — the default `*` is fine for local dev but should be tightened in production.
+3. **Restart the service** so the new variable takes effect, then confirm the API answers only that origin.
 
 ---
 

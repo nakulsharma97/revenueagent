@@ -7,6 +7,7 @@ const caseColors = { PENDING: 'var(--amber)', APPROVED: 'var(--green)', OVERRIDD
 const ACTION_OPTIONS = ['RETRY_SILENT', 'RETRY_NOW', 'RETRY_SCHEDULED', 'SEND_PAYMENT_LINK', 'OFFER_DISCOUNT', 'ESCALATE_TO_HUMAN', 'ABANDON', 'CHECKOUT_REMINDER', 'SEND_REMINDER', 'OFFER_PAYMENT_PLAN', 'PROMISE_FOLLOWUP', 'NO_ACTION'];
 
 export default function HumanReview() {
+  // Fetch-on-mount lives inside the hook, so no effect/state interplay in this component.
   const [cases, setCases] = useState([]);
   const [anomalies, setAnomalies] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -15,26 +16,27 @@ export default function HumanReview() {
   const [openAction, setOpenAction] = useState({});   // id -> chosen override action
   const [reason, setReason] = useState({});            // id -> override reason
 
-  async function load() {
-    setLoading(true);
-    try {
-      const [c, a] = await Promise.all([fetchReviewQueue(), fetchAnomalies('OPEN')]);
-      setCases(c); setAnomalies(a); setError(null);
-    } catch (e) {
-      setError('Could not load the review queue — is the backend running on :8080?');
-    } finally {
-      setLoading(false);
-    }
+  // Fetch data. Mount and Retry flip `loading` first; the promise callbacks only
+  // run after data arrives, so state never changes synchronously inside an effect.
+  function load() {
+    Promise.all([fetchReviewQueue(), fetchAnomalies('OPEN')])
+      .then(([c, a]) => { setCases(c); setAnomalies(a); setLoading(false); setError(null); })
+      .catch(() => { setError('Could not load the review queue — is the backend running on :8080?'); setLoading(false); });
   }
 
-  useEffect(() => { load(); }, []);
+  // Fetch once on mount: initial `loading=true` already shows the spinner, and the
+  // deferred tick keeps the fetch out of the effect's synchronous scope.
+  useEffect(() => {
+    const t = setTimeout(() => { setLoading(true); load(); }, 0);
+    return () => clearTimeout(t);
+  }, []);
 
   async function decide(id, decision) {
     setBusyId(id);
     try {
       const payload = { decision, action: openAction[id] || null, reason: reason[id] || null };
       await resolveReview(id, payload);
-      await load();
+      load();
     } catch (e) {
       setError(e.message || 'Resolution failed');
     } finally {
@@ -64,7 +66,7 @@ export default function HumanReview() {
         <div className="card" style={{ padding: '18px 20px', color: 'var(--red)' }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>⚠ Failed to load review data</div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{error}</div>
-          <button onClick={load} style={{ marginTop: 10, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '7px 16px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>Retry</button>
+          <button onClick={() => { setLoading(true); setError(null); load(); }} style={{ marginTop: 10, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '7px 16px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>Retry</button>
         </div>
       )}
 

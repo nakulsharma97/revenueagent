@@ -12,19 +12,20 @@ export default function ActionLab() {
   const [draft, setDraft] = useState({ name: '', description: '', controlPercentage: 15, treatmentPolicy: '', targetSegment: 'ALL', endDate: '' });
   const [creating, setCreating] = useState(false);
 
-  async function load() {
-    setLoading(true);
-    try {
-      const [r, e, m] = await Promise.all([fetchActionPerformance(), fetchExperiments(), fetchOutcomeMemory()]);
-      setRows(r); setExperiments(e); setMemory(m); setError(null);
-    } catch (err) {
-      setError('Could not load the Action Performance Lab — is the backend running on :8080?');
-    } finally {
-      setLoading(false);
-    }
+  // Fetch data. Mount and Retry flip `loading` first; the promise callbacks only run
+  // after data arrives, so state never changes synchronously inside an effect.
+  function load() {
+    Promise.all([fetchActionPerformance(), fetchExperiments(), fetchOutcomeMemory()])
+      .then(([r, e, m]) => { setRows(r); setExperiments(e); setMemory(m); setLoading(false); setError(null); })
+      .catch(() => { setError('Could not load the Action Performance Lab — is the backend running on :8080?'); setLoading(false); });
   }
 
-  useEffect(() => { load(); }, []);
+  // Fetch once on mount: initial `loading=true` already shows the spinner, and the
+  // deferred tick keeps the fetch out of the effect's synchronous scope.
+  useEffect(() => {
+    const t = setTimeout(() => { setLoading(true); load(); }, 0);
+    return () => clearTimeout(t);
+  }, []);
 
   async function create() {
     if (!draft.name.trim()) return;
@@ -32,7 +33,7 @@ export default function ActionLab() {
     try {
       await createExperiment({ ...draft, controlPercentage: Number(draft.controlPercentage) });
       setDraft({ name: '', description: '', controlPercentage: 15, treatmentPolicy: '', targetSegment: 'ALL', endDate: '' });
-      await load();
+      load();
     } catch (err) {
       setError(err.message || 'Could not create experiment');
     } finally {
@@ -57,7 +58,7 @@ export default function ActionLab() {
       {error && (
         <div className="card" style={{ padding: '16px 18px', color: 'var(--red)' }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>⚠ {error}</div>
-          <button onClick={load} style={{ marginTop: 8, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '7px 16px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>Retry</button>
+          <button onClick={() => { setLoading(true); setError(null); load(); }} style={{ marginTop: 8, background: 'var(--gold)', color: 'var(--text-inverse)', border: 'none', borderRadius: 'var(--radius-sm)', padding: '7px 16px', fontFamily: 'var(--font-body)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>Retry</button>
         </div>
       )}
 

@@ -6,6 +6,13 @@ Razorpay Build submission (Track 03). Backend: Spring Boot 3 / Java 21 / H2 (or 
 
 ## The idea
 
+We started building the obvious thing — a retry bot. Watch a payment fail, retry it,
+remind, retry again. Then we looked at what we'd built and realized it was optimizing
+the wrong number entirely: *success probability*. A discount with 90% success that gives
+away ₹2,000 of margin can be worth less than a 75%-success payment link that costs
+nothing. Any system that can't see that difference will cheerfully burn margin and call
+it recovery.
+
 Most payment-recovery products answer one question: *"which failed payment should I retry?"*
 
 RecoveryOS answers a different, higher-value question:
@@ -82,3 +89,16 @@ The engine and all scenario expectations are deterministic (no randomness in dec
 ## Screens
 
 Command Center · Recovery Simulator · Human Review · Action Lab (performance + experiments) · Bound Register · Transactions · Actions · Decision Ledger (with counterfactual + timeline detail) · Reports · Alerts · Settings.
+
+## Where we'd take this next
+
+Things we ran out of sprint for, written down so we don't pretend the roadmap is done:
+
+- **Train the probability model.** `RecoveryOutcome` rows are shaped exactly for this
+  (action, context, segment, success, cost, time-to-recovery). Today the conversion
+  curves are hand-reasoned product economics; in six months of real traffic they'd be
+  learned instead.
+- **A live payment adapter.** The mock gateway is an explicit boundary, not a secret.
+- **Statistical significance on experiments.** The experiments page declares policies
+  and measures lift, but judgment about "is this real?" is still manual.
+- **Distributed batch locking**, if this ever ran as more than one instance.

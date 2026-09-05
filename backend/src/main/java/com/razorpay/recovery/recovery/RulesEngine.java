@@ -81,7 +81,7 @@ public class RulesEngine {
         }
     }
 
-    /** Actions the transaction is currently allowed to take — the LLM must pick from this set. */
+    /** The bounded action space — every proponent (engine included) must pick from this set. */
     public List<RecoveryAction> eligibleActions(Transaction tx) {
         List<RecoveryAction> eligible = new ArrayList<>();
 
@@ -95,7 +95,9 @@ public class RulesEngine {
 
         if (tx.getFailureReason() != null && tx.getFailureReason().isRetryable()) {
             if (tx.getRetryCount() == 0) {
-                // Silent-first: only background retry, no customer contact.
+                // Silent-first: only background retry, no customer contact. A nudge for a
+                // payment that fixes itself in 40 seconds is an apology for a problem the
+                // customer already solved — and every unnecessary touch burns goodwill.
                 eligible.add(RecoveryAction.RETRY_SILENT);
             } else {
                 // After silent retry has been attempted, open up all retry + customer-facing actions.
@@ -119,9 +121,10 @@ public class RulesEngine {
     }
 
     /**
-     * Re-validates whatever the LLM proposed against the hard limits.
-     * Returns a corrected/rejected decision rather than trusting the model.
-     * Flags when human sign-off is required per the brief's bounded-workflow rules.
+     * Re-validates whatever was proposed against the hard limits. Returns a corrected or
+     * rejected decision rather than trusting the caller — engine, LLM, or anything else.
+     * This is the boundary of the bounded workflow; the "who proposed it" doesn't matter,
+     * only "is it inside policy".
      */
     public EnforcedDecision enforceBounds(Transaction tx, RecoveryDecision proposed) {
         Set<RecoveryAction> allowed = Set.copyOf(eligibleActions(tx));

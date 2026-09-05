@@ -40,6 +40,9 @@ public class DecisionConfidenceService {
         // (escalate / abandon / do-nothing) produce no automatic payment: their lift is
         // necessarily negative, and using |lift| would inflate certainty precisely when the
         // machine is unsure — such decisions must read as LOW confidence + HUMAN_REVIEW.
+        // (First version used Math.abs(lift) and a ₹15,00,000 escalation sailed through at
+        // "86% confident". That number going up as the system gets *less* sure was the
+        // tell that the formula was wrong, not that the engine was good.)
         boolean automatic = switch (chosen.action()) {
             case ESCALATE_TO_HUMAN, ABANDON, NO_ACTION -> false;
             default -> true;

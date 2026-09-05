@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import BoundsRegister from './components/BoundsRegister';
 import StatCard from './components/StatCard';
 import RecoveryChart from './components/RecoveryChart';
@@ -49,7 +49,7 @@ function SummaryStat({ label, value, color, labelColor }) {
   return (
     <div style={{ flex: 1, minWidth: 0, padding: '14px 18px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
       <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: labelColor || 'var(--text-muted)', marginBottom: 6 }}>{label}</div>
-      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 22, fontWeight: 700, color: color || 'var(--text)', lineHeight: 1.2 }}>{value}</div>
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'clamp(15px, 1.5vw, 22px)', fontWeight: 700, color: color || 'var(--text)', lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={String(value)}>{value}</div>
     </div>
   );
 }
@@ -95,7 +95,9 @@ export default function App() {
   const [reviewCount, setReviewCount] = useState(null);
   const [activeNav, setActiveNav] = useState('overview');
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [retryCount, setRetryCount] = useState(0);
+  // Bounded auto-retry for the initial dashboard load: attempts + timer live in a ref
+  // so the fetch callback stays stable and never re-schedules itself on state churn.
+  const dashboardRetries = useRef(0);
   const [actionLog, setActionLog] = useState([]);
   const [allTransactions, setAllTransactions] = useState([]);
   const [txLoadError, setTxLoadError] = useState(null);
@@ -117,15 +119,13 @@ export default function App() {
   const [upliftData, setUpliftData] = useState(null);
   const [commandCenter, setCommandCenter] = useState(null);
 
-  useEffect(() => { if (boundsConfig) setSettingsLocal(boundsConfig); }, [boundsConfig]);
-
   async function saveSettings() {
     setSettingsSaving(true); setSettingsError(null); setSettingsSaved(false);
     try {
       const res = await fetch(`${API_BASE}/api/config/bounds`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settingsLocal) });
       if (!res.ok) {
         let msg = `Save failed (HTTP ${res.status})`;
-        try { const err = await res.json(); if (err && err.message) msg = err.message; else if (err && err.error) msg = err.error; } catch (_) {}
+        try { const err = await res.json(); if (err && err.message) msg = err.message; else if (err && err.error) msg = err.error; } catch {}
         throw new Error(msg);
       }
       const u = await res.json(); setBoundsConfig(u); setSettingsLocal(u); setSettingsSaved(true);
@@ -134,57 +134,69 @@ export default function App() {
     } finally { setSettingsSaving(false); }
   }
 
-  /** Single round-trip: loads metrics + funnel + actions + efficiency. */
-  const loadDashboard = useCallback(async () => {
-    try {
-      const [d, h, u, cc] = await Promise.all([fetchDashboardSummary(), fetchHeldOutMetrics(), fetchUplift().catch(() => null), fetchCommandCenter().catch(() => null)]);
-      setMetrics(d.metrics); setFunnelData(d.funnel); setActionData(d.actions); setEfficiencyData(d.efficiency);
-      setHeldOutMetrics(h); setUpliftData(u); setCommandCenter(cc);
-      setLastUpdated(new Date()); setError(null); setRetryCount(0);
-    } catch (e) {
-      if (retryCount < 3) setTimeout(() => { setRetryCount(c => c + 1); loadDashboard(); }, 2000);
-      else setError('Cannot reach the recovery engine on :8080 — make sure the Spring Boot backend is running, then refresh.');
-    }
-  }, [retryCount]);
-
-  const loadReviewCount = useCallback(async () => {
-    try { const res = await fetch(`${API_BASE}/api/recovery/pending-review`); if (res.ok) { const data = await res.json(); setReviewCount(data.length); setAlerts(data); } } catch (e) {}
+  /** Single round-trip: loads metrics + funnel + actions + efficiency. Setters run only
+   *  in promise continuations so state never changes synchronously inside an effect. */
+  const loadDashboard = useCallback(() => {
+    return Promise.all([fetchDashboardSummary(), fetchHeldOutMetrics(), fetchUplift().catch(() => null), fetchCommandCenter().catch(() => null)])
+      .then(([d, h, u, cc]) => {
+        setMetrics(d.metrics); setFunnelData(d.funnel); setActionData(d.actions); setEfficiencyData(d.efficiency);
+        setHeldOutMetrics(h); setUpliftData(u); setCommandCenter(cc);
+        setLastUpdated(new Date()); setError(null);
+        return true;
+      })
+      .catch(() => false);
   }, []);
 
-  const loadActionLog = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/recovery/transactions`);
-      if (!res.ok) throw new Error(`transactions request failed (${res.status})`);
-      setAllTransactions(await res.json());
-      setTxLoadError(null);
-    } catch (e) {
-      setTxLoadError('Could not load transactions — the recovery engine may be unreachable or returned an error.');
-    }
+  // The mount effect owns the bounded retry. The chain below re-calls loadDashboard on
+  // failure with a 2s backoff — no self-reference inside the callback initializer.
+  const bootstrapDashboard = useCallback(() => {
+    const attempt = (n) => {
+      if (n >= 3) {
+        dashboardRetries.current = 3;
+        setError('Cannot reach the recovery engine on :8080 — make sure the Spring Boot backend is running, then refresh.');
+        return;
+      }
+      loadDashboard().then(ok => {
+        if (ok) { dashboardRetries.current = 0; return; }
+        dashboardRetries.current = n + 1;
+        setTimeout(() => attempt(n + 1), 2000);
+      });
+    };
+    attempt(0);
+  }, [loadDashboard]);
+
+  const loadReviewCount = useCallback(() => {
+    fetch(`${API_BASE}/api/recovery/pending-review`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => { if (data) { setReviewCount(data.length); setAlerts(data); } })
+      .catch(e => console.warn('review-count poll failed (badge may be stale):', e?.message || e));
   }, []);
 
-  const loadAttempts = useCallback(async () => {
-    try {
-      const data = await fetchAttempts();
-      setAttempts(data);
-      setAttemptsLoadError(null);
-    } catch (e) {
-      setAttemptsLoadError('Could not load recovery attempts — the recovery engine may be unreachable.');
-    }
+  const loadActionLog = useCallback(() => {
+    fetch(`${API_BASE}/api/recovery/transactions`)
+      .then(r => { if (!r.ok) throw new Error(`transactions request failed (${r.status})`); return r.json(); })
+      .then(tx => { setAllTransactions(tx); setTxLoadError(null); })
+      .catch(() => setTxLoadError('Could not load transactions — the recovery engine may be unreachable or returned an error.'));
   }, []);
 
-  const loadBoundsConfig = useCallback(async () => {
-    try { const res = await fetch(`${API_BASE}/api/config/bounds`); if (res.ok) setBoundsConfig(await res.json()); } catch (e) {}
+  const loadAttempts = useCallback(() => {
+    fetchAttempts()
+      .then(data => { setAttempts(data); setAttemptsLoadError(null); })
+      .catch(() => setAttemptsLoadError('Could not load recovery attempts — the recovery engine may be unreachable.'));
   }, []);
 
-  const loadReceivables = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/recovery/receivables`);
-      if (!res.ok) throw new Error(`receivables request failed (${res.status})`);
-      setAllReceivables(await res.json());
-      setRcvLoadError(null);
-    } catch (e) {
-      setRcvLoadError('Could not load receivables — the recovery engine may be unreachable or returned an error.');
-    }
+  const loadBoundsConfig = useCallback(() => {
+    fetch(`${API_BASE}/api/config/bounds`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(cfg => { if (cfg) { setBoundsConfig(cfg); setSettingsLocal(cfg); } })
+      .catch(e => console.warn('bounds config load failed (Settings may show defaults):', e?.message || e));
+  }, []);
+
+  const loadReceivables = useCallback(() => {
+    fetch(`${API_BASE}/api/recovery/receivables`)
+      .then(r => { if (!r.ok) throw new Error(`receivables request failed (${r.status})`); return r.json(); })
+      .then(rcv => { setAllReceivables(rcv); setRcvLoadError(null); })
+      .catch(() => setRcvLoadError('Could not load receivables — the recovery engine may be unreachable or returned an error.'));
   }, []);
 
   async function simulateBounds() {
@@ -203,8 +215,8 @@ export default function App() {
     finally { setSimLoading(false); }
   }
 
-  useEffect(() => { loadDashboard(); loadReviewCount(); loadActionLog(); loadAttempts(); loadBoundsConfig(); loadReceivables(); }, []);
-  useEffect(() => { if (funnelRefresh > 0) { loadDashboard(); loadReviewCount(); loadActionLog(); loadAttempts(); } }, [funnelRefresh]);
+  useEffect(() => { bootstrapDashboard(); loadReviewCount(); loadActionLog(); loadAttempts(); loadBoundsConfig(); loadReceivables(); }, [bootstrapDashboard, loadReviewCount, loadActionLog, loadAttempts, loadBoundsConfig, loadReceivables]);
+  useEffect(() => { if (funnelRefresh > 0) { loadDashboard(); loadReviewCount(); loadActionLog(); loadAttempts(); } }, [funnelRefresh, loadDashboard, loadReviewCount, loadActionLog, loadAttempts]);
 
   async function handleRunBatch() {
     setLoading(true); setAttempts([]); setStreamCount(null);
@@ -264,7 +276,7 @@ export default function App() {
         setError('Recovery batch failed — check the backend console for details.');
       }
     } finally {
-      if (window.__batchES) { try { window.__batchES.close(); } catch (_) {} window.__batchES = null; }
+      if (window.__batchES) { try { window.__batchES.close(); } catch {} window.__batchES = null; }
       setLoading(false);
       setTimeout(() => setBatchProgress(null), 5000);
     }
@@ -342,7 +354,7 @@ export default function App() {
   function renderBoundRegister() {
     return (<>
       <PageHeader title="Bound Register" subtitle="Non-negotiable constraints enforced by the RulesEngine before any action executes." />
-      <div style={{ marginBottom: 16 }}><BoundsRegister expanded /></div>
+      <div style={{ marginBottom: 16 }}><BoundsRegister /></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
         <SummaryStat label="MAX RETRIES" value={boundsConfig?.maxRetries ?? 3} color="var(--gold)" />
         <SummaryStat label="MAX DISCOUNT" value={`${boundsConfig?.maxDiscountPercent ?? 15}%`} color="var(--gold-bright)" />
@@ -355,7 +367,6 @@ export default function App() {
   function renderTransactions() {
     const txCount = allTransactions.length;
     const recovered = allTransactions.filter(t => t.status === 'RECOVERED').length;
-    const atRisk = allTransactions.filter(t => t.status === 'AT_RISK').length;
     const inRecovery = allTransactions.filter(t => t.status === 'IN_RECOVERY').length;
     const lost = allTransactions.filter(t => t.status === 'LOST').length;
     return (<>
@@ -455,7 +466,6 @@ export default function App() {
     const sorted = [...(actionLog.length > 0 ? actionLog : attempts)].sort((a, b) => (b.id || 0) - (a.id || 0));
     const successCount = sorted.filter(a => a.outcome === 'SUCCESS').length;
     const failCount = sorted.filter(a => a.outcome === 'FAILED').length;
-    const skippedCount = sorted.filter(a => a.outcome === 'SKIPPED').length;
     const totalCost = sorted.reduce((s, a) => s + (a.interventionCost || 0), 0);
     const totalRecovered = sorted.filter(a => a.outcome === 'SUCCESS').reduce((s, a) => s + (a.amountRecovered || 0), 0);
     return (<>
@@ -962,7 +972,7 @@ export default function App() {
         </footer>
       </div>
 
-      {selectedAttempt && <TransactionModal attempt={selectedAttempt} onClose={() => setSelectedAttempt(null)} />}
+      {selectedAttempt && <TransactionModal key={`${selectedAttempt.sourceType || 'PAYMENT'}-${selectedAttempt.id}`} attempt={selectedAttempt} onClose={() => setSelectedAttempt(null)} />}
     </div>
   );
 }

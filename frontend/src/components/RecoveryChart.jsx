@@ -21,8 +21,8 @@ function CustomTooltip({ active, payload }) {
 
 function RecoveryChartInner({ netRecovered, baseline }) {
   const data = [
-    { name: 'Naive retry-once baseline', value: Math.max(baseline, 1000), key: 'baseline', displayValue: baseline },
-    { name: 'Recovery Intelligence Engine', value: Math.max(netRecovered, 1000), key: 'agent', displayValue: netRecovered },
+    { name: 'Naive retry', value: Math.max(baseline, 1000), key: 'baseline', displayValue: baseline },
+    { name: 'RecoveryOS engine', value: Math.max(netRecovered, 1000), key: 'agent', displayValue: netRecovered },
   ];
   const improvement = netRecovered - baseline;
   const improvementPct = baseline > 0 ? ((improvement / baseline) * 100).toFixed(1) : 0;
@@ -45,7 +45,7 @@ function RecoveryChartInner({ netRecovered, baseline }) {
         <BarChart data={data} layout="vertical" margin={{ left: 0, right: 60, top: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="none" stroke="rgba(255,255,255,0.06)" horizontal={false} />
           <XAxis type="number" stroke="rgba(255,255,255,0.08)" tick={{ fontFamily: 'var(--font-mono)', fontSize: 10, fill: 'var(--text-muted)' }} tickFormatter={v => `₹${(v / 1000).toFixed(0)}K`} />
-          <YAxis type="category" dataKey="name" width={160} stroke="rgba(255,255,255,0.08)" tick={{ fontFamily: 'var(--font-body)', fontSize: 12, fill: 'var(--text-secondary)' }} />
+          <YAxis type="category" dataKey="name" width={110} stroke="rgba(255,255,255,0.08)" tick={{ fontFamily: 'var(--font-body)', fontSize: 12, fill: 'var(--text-secondary)' }} tickFormatter={v => (String(v).length > 14 ? `${String(v).slice(0, 13)}…` : v)} />
           <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(201,154,75,0.06)' }} />
           <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={32} barSize={28}>
             {data.map(d => (
@@ -58,7 +58,7 @@ function RecoveryChartInner({ netRecovered, baseline }) {
           </Bar>
         </BarChart>
       </ResponsiveContainer>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, paddingLeft: 160 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, paddingLeft: 110 }}>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-muted)' }}>₹{baseline.toLocaleString('en-IN')}</span>
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--gold-bright)', fontWeight: 700 }}>₹{netRecovered.toLocaleString('en-IN')}</span>
       </div>

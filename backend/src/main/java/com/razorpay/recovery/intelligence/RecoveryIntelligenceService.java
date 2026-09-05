@@ -154,11 +154,13 @@ public class RecoveryIntelligenceService {
         RecoveryCase full = opt.get();
         IntelligenceDecision decision = engine.decide(full, boundsConfig.getLanguage());
 
-        // ── Enrich the attempt for the ledger UI ──
+        // Ledger UI enrichment: state + fatigue chips render straight off the attempt.
         attempt.setRecoveryState(decision.recoveryState());
         attempt.setFatigueScore(decision.fatigueScore());
 
-        // ── Persist counterfactual rows ──
+        // Every candidate the engine weighed gets its own row — including the losers.
+        // The "what we didn't do and why" is the whole point of counterfactual decisioning;
+        // showing only the winner would just be a fancier retry log.
         String sourceType = sourceName(attempt);
         Long entityId = entityId(attempt);
         for (ActionEvaluation e : decision.alternatives()) {
@@ -168,7 +170,8 @@ public class RecoveryIntelligenceService {
             counterfactualRepository.save(CounterfactualDecision.from(e, sourceType, entityId, batchId, amountOf(attempt), selected));
         }
 
-        // ── Anomalies ──
+        // Anomalies: deduped per (type, entity) so a case that keeps failing doesn't
+        // stack five identical CRITICAL rows and bury the genuinely new ones.
         boolean criticalAnomaly = false;
         for (AnomalyDetectionService.Finding f : engine.anomalies(full)) {
             boolean alreadyOpen = anomalyRepository
@@ -261,9 +264,9 @@ public class RecoveryIntelligenceService {
         return counterfactualRepository.findTop100ByOrderByCreatedAtDesc().stream().limit(limit).toList();
     }
 
-    // ═══════════════════════════════════════════════════════════════
+    // -----------------------------------------------------------------
     // Human Review Queue
-    // ═══════════════════════════════════════════════════════════════
+    // -----------------------------------------------------------------
 
     @Transactional(readOnly = true)
     public List<HumanReviewCase> reviewQueue(String status) {
@@ -316,9 +319,8 @@ public class RecoveryIntelligenceService {
         return c;
     }
 
-    // ═══════════════════════════════════════════════════════════════
     // Anomalies & Experiments
-    // ═══════════════════════════════════════════════════════════════
+    // -----------------------
 
     @Transactional(readOnly = true)
     public List<RecoveryAnomaly> anomalies(String status) {
@@ -354,9 +356,8 @@ public class RecoveryIntelligenceService {
         return experimentRepository.save(e);
     }
 
-    // ═══════════════════════════════════════════════════════════════
     // Command Center + Timeline
-    // ═══════════════════════════════════════════════════════════════
+    // -------------------------
 
     /** Aggregate numbers for the Command Center header. */
     @Transactional(readOnly = true)

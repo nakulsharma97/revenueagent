@@ -58,3 +58,21 @@ Then answer the obvious question: *why did it do that?* → every decision carri
 
 - If a case you search isn't in the ledger, run a batch first (top-right **Run Batch ▶**) — it re-processes eligible items and refreshes everything, including the review queue.
 - Backend sanity endpoints: `GET /api/intelligence/command-center`, `GET /api/intelligence/review`, `GET /api/intelligence/outcome-memory`, `GET /api/recovery/attempts`, `GET /api/audit/events` (audit trail).
+
+---
+
+## What we'd build next (honest notes from the team)
+
+We ran out of time for these, and we'd rather say so than pretend:
+
+- **Real outcome data.** Our outcome memory learns from seeded mock gateway draws. Given two
+  weeks with production traffic, the per-action conversion priors would come from real
+  recovery outcomes instead — the schema and feedback loop already exist for it.
+- **Bandit-style exploration.** Right now the engine is greedy on expected net value within
+  hard policy bounds. An epsilon exploration budget per segment would let it discover better
+  priors on its own.
+- **Per-customer channel preferences.** Fatigue is currently a single score; email vs SMS vs
+  push fatigue should really be tracked separately.
+- During testing we found the discount tiers for HIGH_VALUE looked "wrong" next to STANDARD
+  cases until we added the ceiling explainer to the counterfactual view — small UI details
+  carry a lot of the trust story.

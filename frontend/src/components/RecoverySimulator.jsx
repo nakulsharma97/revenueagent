@@ -7,7 +7,6 @@ const FAILURE_REASONS = [
 ];
 const ABANDON_REASONS = ['PRICE_HESITATION', 'PAYMENT_METHOD_DECLINED', 'DISTRACTED_NO_COMPLETION', 'TECHNICAL_ERROR'];
 
-const ACTIONS = ['RECOVERY_SIMULATOR'];
 const fmt = (v) => (v === null || v === undefined ? '—' : `₹${Number(v).toLocaleString('en-IN')}`);
 const pct = (v) => (v === null || v === undefined ? '—' : `${(v * 100).toFixed(0)}%`);
 
@@ -156,7 +155,7 @@ export default function RecoverySimulator() {
             <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text)', marginBottom: 4 }}>COUNTERFACTUAL SIMULATION — {result.alternatives?.length || 0} ACTIONS EVALUATED</div>
             <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>Every allowed action was simulated against the {pct(result.baselineProbability)} natural-recovery baseline. Ranked by expected incremental net value.</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {(result.alternatives || []).map((alt, i) => {
+              {(result.alternatives || []).map(alt => {
                 const isChosen = chosen && alt.action === chosen.action && (alt.discountPercent || null) === (chosen.discountPercent || null);
                 const maxInc = Math.max(0.01, ...(result.alternatives || []).map(a => Number(a.incrementalNetValue) || 0));
                 const inc = Number(alt.incrementalNetValue) || 0;

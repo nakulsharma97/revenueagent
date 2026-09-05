@@ -37,7 +37,7 @@ export function runBatchStream(onAttempt, onDone, onTotal) {
   es.addEventListener('done', (e) => {
     // Newer backends send JSON counts; older numeric payloads are treated as processed-only.
     let counts = { processed: -1, skipped: 0, failed: 0 };
-    try { counts = JSON.parse(e.data); } catch (_) { counts = { processed: parseInt(e.data), skipped: 0, failed: 0 }; }
+    try { counts = JSON.parse(e.data); } catch { counts = { processed: parseInt(e.data), skipped: 0, failed: 0 }; }
     onDone(counts);
     es.close();
   });

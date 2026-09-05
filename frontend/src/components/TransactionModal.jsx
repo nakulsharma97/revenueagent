@@ -8,21 +8,19 @@ export default function TransactionModal({ attempt, onClose }) {
   const [counterfactuals, setCounterfactuals] = useState(null);
   const [timeline, setTimeline] = useState(null);
 
+  // State starts null (modal shows "no data yet") and only flips once data arrives —
+  // setting it synchronously here made the modal flash empty on every reopen. The
+  // modal is keyed by attempt in App.jsx, so a new case remounts and stale rows vanish.
   useEffect(() => {
+    const src = attempt && (attempt.transaction ? { t: 'PAYMENT', id: attempt.transaction.id }
+      : attempt.checkoutSession ? { t: 'CHECKOUT', id: attempt.checkoutSession.id }
+      : attempt.receivable ? { t: 'RECEIVABLE', id: attempt.receivable.id } : null);
+    if (!src || !src.id || !attempt.actionTaken || attempt.actionTaken === 'NO_ACTION') return;
     let alive = true;
-    setCounterfactuals(null);
-    setTimeline(null);
-    if (attempt) {
-      const src = attempt.transaction ? { t: 'PAYMENT', id: attempt.transaction.id }
-        : attempt.checkoutSession ? { t: 'CHECKOUT', id: attempt.checkoutSession.id }
-        : attempt.receivable ? { t: 'RECEIVABLE', id: attempt.receivable.id } : null;
-      if (src && src.id && attempt.actionTaken && attempt.actionTaken !== 'NO_ACTION') {
-        Promise.all([
-          fetchCounterfactuals(src.t, src.id).catch(() => []),
-          fetchTimeline(src.t, src.id).catch(() => []),
-        ]).then(([c, t]) => { if (alive) { setCounterfactuals(c); setTimeline(t); } });
-      }
-    }
+    Promise.all([
+      fetchCounterfactuals(src.t, src.id).catch(() => []),
+      fetchTimeline(src.t, src.id).catch(() => []),
+    ]).then(([c, t]) => { if (alive) { setCounterfactuals(c); setTimeline(t); } });
     return () => { alive = false; };
   }, [attempt]);
 

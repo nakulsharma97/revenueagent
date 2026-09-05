@@ -17,14 +17,10 @@ import java.math.BigDecimal;
 @Service
 public class RecoveryValueOptimizer {
 
-    /** Expected recovered revenue minus all costs, for display/audit. */
-    public BigDecimal netValueOf(ActionEvaluation e) {
-        return e.expectedNetValue();
-    }
-
     /**
-     * Ranks the winning action: highest incremental net value. Ties break toward the
-     * lower-risk / lower-cost option so the system never chases noise.
+     * Picks the winner by incremental net value. Ties break toward the lower-risk option
+     * — when two actions are worth the same, there is no revenue argument for taking the
+     * riskier one, so don't.
      */
     public ActionEvaluation bestByIncrementalNetValue(java.util.List<ActionEvaluation> candidates) {
         ActionEvaluation best = null;

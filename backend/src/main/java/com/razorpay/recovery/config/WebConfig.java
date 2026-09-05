@@ -7,14 +7,17 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
 
-import java.util.List;
-
-/**
- * Global CORS configuration.
- * Reads FRONTEND_ORIGIN env var — set it to the deployed frontend URL
- * (e.g. https://your-app.vercel.app) in production.
- * Defaults to * for local development.
- */
+import java.util.List;    /**
+     * Global CORS configuration.
+     * Reads the FRONTEND_ORIGIN env var and defaults to {@code *} for local development.
+     *
+     * ⚠ SECURITY WARNING (production): the {@code *} default combined with
+     * allowCredentials(true) is safe for local dev only. Before any production
+     * deploy (Railway/Render/Vercel) you MUST set FRONTEND_ORIGIN to the exact
+     * deployed frontend URL (e.g. https://your-app.vercel.app) — see DEPLOY.md
+     * "Post-Deploy: Lock Down CORS". With credentials allowed, the wildcard would
+     * otherwise let any origin read authenticated responses.
+     */
 @Configuration
 public class WebConfig {
 

@@ -34,7 +34,9 @@ public class RecoveryFatigueService {
             }
         }
         double score = clamp(raw, 0.0, 1.0);
-        // High-value customers tolerate (and justify) more touchpoints.
+        // High-value customers tolerate (and justify) more touchpoints. Half-weight is a
+        // product call, not a formula: losing a HIGH_VALUE subscriber costs more than the
+        // mild annoyance of one extra reminder, so the fatigue ceiling bites later for them.
         if (c.highValue()) score *= 0.5;
         return Math.round(score * 100.0) / 100.0;
     }

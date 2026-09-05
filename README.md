@@ -4,9 +4,16 @@
 
 Built for the Razorpay AI Buildathon (Track 03).
 
-<!-- TODO: Record a 90-second screen capture, save as docs/demo.gif + docs/demo-thumbnail.png,
-     then uncomment the line below. See docs/DEMO_SCRIPT.md for the walkthrough outline. -->
-<!-- [![Demo](docs/demo-thumbnail.png)](docs/demo.gif) -->
+## ⏺ Demo video — last manual step before submission
+
+> Record a **90-second screen capture** following `docs/DEMO_SCRIPT.md`, then:
+> 1. Save the video as **`docs/demo.gif`**
+> 2. Save a poster frame as **`docs/demo-thumbnail.png`**
+> 3. Uncomment the image line below and delete this checklist.
+
+```md
+<!-- [![Watch the demo](docs/demo-thumbnail.png)](docs/demo.gif) -->
+```
 
 ## What this does
 
@@ -372,4 +379,27 @@ The `RulesEngine` enforces this in code: SURE_THING and LOST_CAUSE entities have
 
 **5-minute screening pitch:** See `docs/PITCH_5MIN.md` — a timed, word-for-word speech with the live-demo click path for judges.
 
-**Detailed demo walkthrough:** See `docs/DEMO_SCRIPT.md`.
+**Detailed demo walkthrough:** See `docs/DEMO_SCRIPT.md`. Evolution story: `CHANGELOG.md`.
+
+---
+
+## Known limitations (and what we'd build next)
+
+Being upfront about where this falls short — every system has these, and pretending otherwise
+is how demo-ware happens.
+
+- **Execution is mocked, deliberately.** The payment gateway and notification services are
+  explicit mock implementations so the demo runs offline and deterministically. Swapping in
+  live Razorpay APIs is an adapter change, not an architecture change — but it *is* unbuilt.
+- **The probability model is hand-tuned, not learned.** Conversion curves encode product
+  economics we believed. They're shaped for ML training (`RecoveryOutcome` rows), but today
+  a good analyst with a spreadsheet could argue with several of them.
+- **The control group is honest but small.** Uplift numbers on the seeded demo data are
+  directional, not statistically significant. In production you'd want far more traffic
+  before quoting them.
+- **Single-node only.** Batch locking is an in-JVM guard; horizontal scaling needs a real
+  distributed lock (or a job queue).
+
+**What we'd build next:** train the probability model on real outcome rows, add a live
+Razorpay adapter, and let the experiments page compute significance automatically instead
+of exporting to a spreadsheet.
