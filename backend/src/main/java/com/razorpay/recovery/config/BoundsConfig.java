@@ -80,32 +80,46 @@ public class BoundsConfig {
                 hvMaxRetries, hvMaxDiscountPercent, hvMinAmountForDiscount);
     }
 
-    /** Apply values from a PUT request. Only non-null fields are updated. */
+    /**
+     * Apply values from a PUT request. Only non-null fields change, but the WHOLE
+     * request is rejected ({@link IllegalArgumentException} → HTTP 400) if any supplied
+     * value is out of range — silently ignoring an invalid edit would mislead callers
+     * into believing their bounds changed.
+     */
     public void apply(Integer maxRetries, Integer maxDiscountPercent, BigDecimal minAmountForDiscount, Integer retryCooldownMinutes,
                       Integer hvMaxRetries, Integer hvMaxDiscountPercent, BigDecimal hvMinAmountForDiscount, String lang) {
-        if (maxRetries != null && maxRetries >= 1 && maxRetries <= 10) {
-            this.maxRetries = maxRetries;
+        if (maxRetries != null && (maxRetries < 1 || maxRetries > 10)) {
+            throw new IllegalArgumentException("maxRetries must be between 1 and 10");
         }
-        if (maxDiscountPercent != null && maxDiscountPercent >= 0 && maxDiscountPercent <= 50) {
-            this.maxDiscountPercent = maxDiscountPercent;
+        if (maxDiscountPercent != null && (maxDiscountPercent < 0 || maxDiscountPercent > 50)) {
+            throw new IllegalArgumentException("maxDiscountPercent must be between 0 and 50");
         }
-        if (minAmountForDiscount != null && minAmountForDiscount.compareTo(BigDecimal.ZERO) > 0) {
-            this.minAmountForDiscount = minAmountForDiscount;
+        if (minAmountForDiscount != null && minAmountForDiscount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("minAmountForDiscount must be greater than 0");
         }
-        if (retryCooldownMinutes != null && retryCooldownMinutes >= 0 && retryCooldownMinutes <= 1440) {
-            this.retryCooldownMinutes = retryCooldownMinutes;
+        if (retryCooldownMinutes != null && (retryCooldownMinutes < 0 || retryCooldownMinutes > 1440)) {
+            throw new IllegalArgumentException("retryCooldownMinutes must be between 0 and 1440");
         }
-        if (lang != null && (lang.equals("en") || lang.equals("hinglish"))) {
-            this.language = lang;
+        if (lang != null && !lang.equals("en") && !lang.equals("hinglish")) {
+            throw new IllegalArgumentException("language must be 'en' or 'hinglish'");
         }
-        if (hvMaxRetries != null && hvMaxRetries >= 1 && hvMaxRetries <= 15) {
-            this.hvMaxRetries = hvMaxRetries;
+        if (hvMaxRetries != null && (hvMaxRetries < 1 || hvMaxRetries > 15)) {
+            throw new IllegalArgumentException("hvMaxRetries must be between 1 and 15");
         }
-        if (hvMaxDiscountPercent != null && hvMaxDiscountPercent >= 0 && hvMaxDiscountPercent <= 50) {
-            this.hvMaxDiscountPercent = hvMaxDiscountPercent;
+        if (hvMaxDiscountPercent != null && (hvMaxDiscountPercent < 0 || hvMaxDiscountPercent > 50)) {
+            throw new IllegalArgumentException("hvMaxDiscountPercent must be between 0 and 50");
         }
-        if (hvMinAmountForDiscount != null && hvMinAmountForDiscount.compareTo(BigDecimal.ZERO) > 0) {
-            this.hvMinAmountForDiscount = hvMinAmountForDiscount;
+        if (hvMinAmountForDiscount != null && hvMinAmountForDiscount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("hvMinAmountForDiscount must be greater than 0");
         }
+
+        if (maxRetries != null) this.maxRetries = maxRetries;
+        if (maxDiscountPercent != null) this.maxDiscountPercent = maxDiscountPercent;
+        if (minAmountForDiscount != null) this.minAmountForDiscount = minAmountForDiscount;
+        if (retryCooldownMinutes != null) this.retryCooldownMinutes = retryCooldownMinutes;
+        if (lang != null) this.language = lang;
+        if (hvMaxRetries != null) this.hvMaxRetries = hvMaxRetries;
+        if (hvMaxDiscountPercent != null) this.hvMaxDiscountPercent = hvMaxDiscountPercent;
+        if (hvMinAmountForDiscount != null) this.hvMinAmountForDiscount = hvMinAmountForDiscount;
     }
 }

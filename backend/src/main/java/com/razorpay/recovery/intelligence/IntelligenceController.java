@@ -6,6 +6,7 @@ import com.razorpay.recovery.customer.Customer;
 import com.razorpay.recovery.receivable.Receivable;
 import com.razorpay.recovery.recovery.RecoveryAttempt.RecoveryAction;
 import com.razorpay.recovery.recovery.RulesEngine;
+import com.razorpay.recovery.subscription.Subscription;
 import com.razorpay.recovery.transaction.Transaction;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -122,6 +123,18 @@ public class IntelligenceController {
                         tx.setFailureReason(Transaction.FailureReason.valueOf(req.failureReason()));
                     }
                     tx.setStatus(req.retryCount() > 0 ? Transaction.TransactionStatus.IN_RECOVERY : Transaction.TransactionStatus.AT_RISK);
+                    // RecoveryCase.fromPayment reads the customer's reliability from the
+                    // subscription → customer chain, so a bare Transaction would silently drop
+                    // the simulator's reliability input (always defaulting to 0.5). Attach a
+                    // transient chain when the caller supplied a score.
+                    if (req.reliability() != null) {
+                        Customer customer = new Customer();
+                        customer.setPaymentReliabilityScore(reliability);
+                        customer.setCustomerSegment(seg);
+                        Subscription subscription = new Subscription();
+                        subscription.setCustomer(customer);
+                        tx.setSubscription(subscription);
+                    }
                     List<RecoveryAction> eligible = rulesEngine.eligibleActions(tx, seg);
                     return RecoveryCase.fromPayment(tx, seg, eligible, bounds.maxRetries(), bounds.maxDiscountPercent());
                 }
@@ -147,8 +160,10 @@ public class IntelligenceController {
                         receivable.setPromiseStatus(Receivable.PromiseStatus.BROKEN);
                     }
                     List<RecoveryAction> eligible = rulesEngine.eligibleActions(receivable);
-                    return RecoveryCase.fromReceivable(receivable, eligible,
+                    RecoveryCase rc = RecoveryCase.fromReceivable(receivable, eligible,
                             boundsConfig.getMaxRetries(), boundsConfig.getMaxDiscountPercent());
+                    // fromReceivable hardcodes 0.5 reliability — honour the simulator input.
+                    return req.reliability() == null ? rc : rc.withReliability(reliability);
                 }
                 default:
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown sourceType " + req.sourceType());

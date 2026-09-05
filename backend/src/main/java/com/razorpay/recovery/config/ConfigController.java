@@ -1,7 +1,8 @@
 package com.razorpay.recovery.config;
 
-import com.razorpay.recovery.config.BoundsConfig;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 
@@ -27,16 +28,21 @@ public class ConfigController {
 
     @PutMapping("/bounds")
     public BoundsConfig.BoundsSnapshot updateBounds(@RequestBody BoundsUpdateRequest request) {
-        boundsConfig.apply(
-                request.maxRetries(),
+        try {
+            boundsConfig.apply(
+                    request.maxRetries(),
                 request.maxDiscountPercent(),
                 request.minAmountForDiscount(),
                 request.retryCooldownMinutes(),
                 request.hvMaxRetries(),
                 request.hvMaxDiscountPercent(),
-                request.hvMinAmountForDiscount(),
-                request.language()
-        );
+                    request.hvMinAmountForDiscount(),
+                    request.language()
+            );
+        } catch (IllegalArgumentException e) {
+            // An out-of-range edit must fail loudly, not be silently ignored.
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
         return boundsConfig.snapshot();
     }
 

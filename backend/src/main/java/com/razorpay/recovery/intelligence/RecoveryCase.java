@@ -63,6 +63,13 @@ public record RecoveryCase(
                 eligible, maxRetries, maxDiscountPercent, label, fatigueScore);
     }
 
+    /** Copy with an explicit customer reliability score (ad-hoc simulator requests). */
+    public RecoveryCase withReliability(double reliabilityScore) {
+        return new RecoveryCase(sourceType, entityId, amount, retryCount, reminderCount, totalInterventions,
+                daysOverdue, retryable, terminal, reliabilityScore, highValue, failureMode, promiseBroken,
+                eligible, maxRetries, maxDiscountPercent, label, fatigueScore);
+    }
+
     public double fatigue() {
         return fatigueScore;
     }
