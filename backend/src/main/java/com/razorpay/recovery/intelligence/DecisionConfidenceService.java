@@ -36,7 +36,16 @@ public class DecisionConfidenceService {
     );
 
     public Assessment assess(RecoveryCase c, ActionEvaluation chosen, double fatigue) {
-        double clarity = Math.min(1.0, Math.abs(chosen.incrementalLift()) * 3.5);
+        // Only an action that can itself recover the payment is a confident call. Hand-offs
+        // (escalate / abandon / do-nothing) produce no automatic payment: their lift is
+        // necessarily negative, and using |lift| would inflate certainty precisely when the
+        // machine is unsure — such decisions must read as LOW confidence + HUMAN_REVIEW.
+        boolean automatic = switch (chosen.action()) {
+            case ESCALATE_TO_HUMAN, ABANDON, NO_ACTION -> false;
+            default -> true;
+        };
+        double clarity = automatic && chosen.incrementalLift() > 0
+                ? Math.min(1.0, chosen.incrementalLift() * 3.5) : 0.0;
         double dataRichness = 0.5 + 0.2 * c.reliability()
                 + (c.amount() != null && c.amount().doubleValue() >= 500 ? 0.1 : 0.0)
                 + (c.eligible() != null && c.eligible().size() >= 3 ? 0.05 : 0.0);

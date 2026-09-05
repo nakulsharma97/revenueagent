@@ -470,10 +470,25 @@ class RecoveryPipelineIntegrationTest {
     }
 
     private static Object getField(Object target, String name) {
+        // Spring AOP beans (this one has @Transactional methods) come wrapped in a proxy;
+        // its wrapper instance does not carry the bean's state. Unwrap to the real target,
+        // then walk up the class hierarchy until the field is found.
         try {
-            java.lang.reflect.Field f = target.getClass().getDeclaredField(name);
-            f.setAccessible(true);
-            return f.get(target);
+            Object bean = target;
+            if (target instanceof org.springframework.aop.framework.Advised advised) {
+                bean = advised.getTargetSource().getTarget();
+            }
+            Class<?> c = bean.getClass();
+            while (c != null) {
+                try {
+                    java.lang.reflect.Field f = c.getDeclaredField(name);
+                    f.setAccessible(true);
+                    return f.get(bean);
+                } catch (NoSuchFieldException e) {
+                    c = c.getSuperclass();
+                }
+            }
+            throw new NoSuchFieldException(name);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

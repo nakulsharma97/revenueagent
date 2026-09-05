@@ -66,8 +66,8 @@ public class UpliftScoringService {
     /** Natural (no-intervention) baseline probability of payment. */
     public double baselineProbability(RecoveryCase c) {
         return switch (c.sourceType()) {
-            case "PAYMENT" -> clamp(0.05, 0.5, retryProbability(c) * 0.45 + c.reliability() * 0.18);
-            case "CHECKOUT" -> clamp(0.05, 0.4, intent(c) * 0.22);
+            case "PAYMENT" -> clamp(retryProbability(c) * 0.45 + c.reliability() * 0.18, 0.05, 0.5);
+            case "CHECKOUT" -> clamp(intent(c) * 0.22, 0.05, 0.4);
             default -> c.daysOverdue() <= 30 ? 0.15 : 0.08;
         };
     }
@@ -94,19 +94,19 @@ public class UpliftScoringService {
                 return c.retryable() ? retryProbability(c) : 0.0;
             case SEND_PAYMENT_LINK:
                 if (c.sourceType().equals("CHECKOUT")) {
-                    return clamp(0.05, 0.65, intent(c) * 0.55);
+                    return clamp(intent(c) * 0.55, 0.05, 0.65);
                 }
                 // Payments: a pay link lets the customer act themselves — strongest for
                 // terminal causes (they must update their instrument) and moderate otherwise.
                 double terminalBoost = isTerminalCard(mode) || "VPA_INVALID".equals(mode) ? 0.20 : 0.0;
                 double retryableBoost = c.retryable() ? 0.05 : 0.0;
-                return clamp(0.15, 0.60, 0.22 + 0.12 * c.reliability() + terminalBoost + retryableBoost);
+                return clamp(0.22 + 0.12 * c.reliability() + terminalBoost + retryableBoost, 0.15, 0.60);
             case OFFER_DISCOUNT: {
                 if (c.sourceType().equals("CHECKOUT")) {
                     int pct = discountPct == null ? 10 : discountPct;
                     boolean priceHesitant = mode.equals("PRICE_HESITATION");
                     double sensitivity = priceHesitant ? 1.6 : 0.75;
-                    return clamp(0.10, 0.72, (intent(c) * 0.30 + 0.12 + pct * 0.02) * sensitivity);
+                    return clamp((intent(c) * 0.30 + 0.12 + pct * 0.02) * sensitivity, 0.10, 0.72);
                 }
                 int pct = discountPct == null ? 10 : discountPct;
                 double causeBonus = isTerminalCard(mode) ? 0.05
@@ -121,10 +121,10 @@ public class UpliftScoringService {
                 double p = (0.15 + 0.08 * c.reliability() + causeBonus + pct * 0.02) * multiplier;
                 if (c.reliability() > 0.75) p *= 0.9;   // don't pay for customers who would pay anyway
                 if (c.fatigue() >= 0.30) p *= 0.9;       // fatigued customers tune out incentives
-                return clamp(0.05, 0.65, p);
+                return clamp(p, 0.05, 0.65);
             }
             case CHECKOUT_REMINDER:
-                return clamp(0.05, 0.6, intent(c) * 0.45);
+                return clamp(intent(c) * 0.45, 0.05, 0.6);
             case SEND_REMINDER:
                 return c.daysOverdue() <= 30 ? 0.40 : 0.20;
             case OFFER_PAYMENT_PLAN:
@@ -208,7 +208,7 @@ public class UpliftScoringService {
                 money(expectedNet),
                 money(incrementalNet),
                 round4(risk),
-                round4(clamp(0.4, 0.99, 0.5 + 0.35 * Math.min(1, Math.abs(p - baseline) * 3))),
+                round4(clamp(0.5 + 0.35 * Math.min(1, Math.abs(p - baseline) * 3), 0.4, 0.99)),
                 reasoning
         );
     }
